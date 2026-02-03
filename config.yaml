@@ -1,0 +1,28 @@
+version: "1.0.0"
+
+detection:
+  min_confidence_threshold: 0.3
+  auto_synthesize_threshold: 0.7
+  triggers:
+    on_failure: true
+    on_friction: true
+    on_session_end: true
+    periodic_minutes: 30
+
+synthesis:
+  synthesis_model: sonnet
+  detection_model: haiku
+  max_proposals_per_day: 10
+
+meta_evolution:
+  enabled: true
+  analysis_frequency: weekly
+  max_meta_proposals_per_week: 3
+
+scoping:
+  default_scope: global
+  project_detection: auto
+
+storage:
+  observations_max_mb: 50
+  archive_after_days: 7
