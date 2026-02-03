@@ -1,0 +1,37 @@
+---
+id: workflow-gap-detector
+version: 1
+gap_type: workflow
+priority: medium
+enabled: true
+
+triggers:
+  - condition: "raw_json contains 'repeat'"
+    extract:
+      desired_capability: "regex: repeat(?:ing|ed)? ([^.]+)"
+    confidence_boost: 0.2
+
+  - condition: "raw_json contains 'again and again'"
+    confidence_boost: 0.25
+
+  - condition: "raw_json contains 'manual process'"
+    confidence_boost: 0.3
+
+  - condition: "raw_json contains 'tedious'"
+    confidence_boost: 0.2
+
+  - condition: "raw_json contains 'every time'"
+    confidence_boost: 0.2
+
+  - condition: "raw_json contains 'automate'"
+    extract:
+      desired_capability: "regex: automate ([^.]+)"
+    confidence_boost: 0.3
+
+min_confidence: 0.35
+
+scope_inference:
+  - if: "project"
+    then: project
+  - if: "default"
+    then: global

@@ -1,0 +1,39 @@
+---
+id: tool-gap-detector
+version: 1
+gap_type: tool
+priority: high
+enabled: true
+
+triggers:
+  - condition: "raw_json contains 'can''t'"
+    extract:
+      desired_capability: "regex: (?:can't|cannot|unable to|don't have|no way to|not able to) ([^.]+)"
+    confidence_boost: 0.3
+
+  - condition: "tool_success == 0"
+    extract:
+      desired_capability: "field:tool_error"
+    confidence_boost: 0.2
+
+  - condition: "raw_json contains 'not available'"
+    extract:
+      desired_capability: "regex: ([^.]+) (?:is )?not available"
+    confidence_boost: 0.25
+
+  - condition: "raw_json contains 'no tool'"
+    confidence_boost: 0.3
+
+  - condition: "raw_json contains 'missing capability'"
+    confidence_boost: 0.35
+
+  - condition: "raw_json contains 'I don''t have access'"
+    confidence_boost: 0.35
+
+min_confidence: 0.3
+
+scope_inference:
+  - if: "project-specific"
+    then: project
+  - if: "default"
+    then: global

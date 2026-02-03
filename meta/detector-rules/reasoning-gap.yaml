@@ -1,0 +1,33 @@
+---
+id: reasoning-gap-detector
+version: 1
+gap_type: reasoning
+priority: medium
+enabled: true
+
+triggers:
+  - condition: "raw_json contains 'complex'"
+    confidence_boost: 0.15
+
+  - condition: "raw_json contains 'struggling with'"
+    extract:
+      desired_capability: "regex: struggling with ([^.]+)"
+    confidence_boost: 0.3
+
+  - condition: "raw_json contains 'hard to reason'"
+    confidence_boost: 0.3
+
+  - condition: "raw_json contains 'tricky'"
+    confidence_boost: 0.15
+
+  - condition: "raw_json contains 'concurrency'"
+    confidence_boost: 0.2
+
+  - condition: "raw_json contains 'race condition'"
+    confidence_boost: 0.25
+
+min_confidence: 0.4
+
+scope_inference:
+  - if: "default"
+    then: global

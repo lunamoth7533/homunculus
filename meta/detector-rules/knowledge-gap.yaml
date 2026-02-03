@@ -1,0 +1,36 @@
+---
+id: knowledge-gap-detector
+version: 1
+gap_type: knowledge
+priority: medium
+enabled: true
+
+triggers:
+  - condition: "raw_json contains 'don''t understand'"
+    extract:
+      desired_capability: "regex: don't understand ([^.]+)"
+    confidence_boost: 0.25
+
+  - condition: "raw_json contains 'unfamiliar with'"
+    extract:
+      desired_capability: "regex: unfamiliar with ([^.]+)"
+    confidence_boost: 0.25
+
+  - condition: "raw_json contains 'need to learn'"
+    confidence_boost: 0.2
+
+  - condition: "raw_json contains 'not sure how'"
+    confidence_boost: 0.2
+
+  - condition: "raw_json contains 'need more context'"
+    confidence_boost: 0.2
+
+min_confidence: 0.3
+
+scope_inference:
+  - if: "codebase"
+    then: project
+  - if: "architecture"
+    then: project
+  - if: "default"
+    then: global

@@ -1,0 +1,28 @@
+---
+id: evolution-gap-detector
+version: 1
+gap_type: evolution
+priority: medium
+enabled: true
+
+triggers:
+  - condition: "raw_json contains 'detection missing'"
+    confidence_boost: 0.35
+
+  - condition: "raw_json contains 'template not working'"
+    confidence_boost: 0.35
+
+  - condition: "raw_json contains 'proposal rejected'"
+    confidence_boost: 0.25
+
+  - condition: "raw_json contains 'homunculus'"
+    confidence_boost: 0.15
+
+  - condition: "raw_json contains 'evolution system'"
+    confidence_boost: 0.3
+
+min_confidence: 0.45
+
+scope_inference:
+  - if: "default"
+    then: global

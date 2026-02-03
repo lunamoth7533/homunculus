@@ -1,0 +1,28 @@
+---
+id: self-awareness-gap-detector
+version: 1
+gap_type: self_awareness
+priority: low
+enabled: true
+
+triggers:
+  - condition: "raw_json contains 'don''t know what I don''t know'"
+    confidence_boost: 0.4
+
+  - condition: "raw_json contains 'blind spot'"
+    confidence_boost: 0.35
+
+  - condition: "raw_json contains 'limitation'"
+    confidence_boost: 0.2
+
+  - condition: "raw_json contains 'not aware'"
+    confidence_boost: 0.25
+
+  - condition: "raw_json contains 'surprised'"
+    confidence_boost: 0.15
+
+min_confidence: 0.45
+
+scope_inference:
+  - if: "default"
+    then: global

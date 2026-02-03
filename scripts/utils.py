@@ -96,16 +96,130 @@ def append_jsonl(file_path: Path, data: Dict) -> None:
         f.write(json.dumps(data) + '\n')
 
 
+def _simple_yaml_parse(text: str) -> Dict:
+    """Simple YAML parser for basic key-value and list structures."""
+    result = {}
+    current_key = None
+    current_list = None
+    indent_stack = [(0, result)]
+
+    lines = text.split('\n')
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.lstrip()
+
+        # Skip empty lines and comments
+        if not stripped or stripped.startswith('#'):
+            i += 1
+            continue
+
+        # Skip document markers
+        if stripped == '---':
+            i += 1
+            continue
+
+        indent = len(line) - len(stripped)
+
+        # Handle list items
+        if stripped.startswith('- '):
+            item_content = stripped[2:].strip()
+
+            # Find the right container based on indent
+            while indent_stack and indent_stack[-1][0] >= indent and len(indent_stack) > 1:
+                indent_stack.pop()
+
+            container = indent_stack[-1][1]
+
+            if current_key and current_key in container:
+                if not isinstance(container[current_key], list):
+                    container[current_key] = []
+
+                # Check if it's a dict item or simple value
+                if ':' in item_content and not item_content.startswith('"'):
+                    # Dict item in list
+                    item_dict = {}
+                    key, val = item_content.split(':', 1)
+                    item_dict[key.strip()] = _parse_yaml_value(val.strip())
+                    container[current_key].append(item_dict)
+                else:
+                    container[current_key].append(_parse_yaml_value(item_content))
+            i += 1
+            continue
+
+        # Handle key-value pairs
+        if ':' in stripped:
+            colon_pos = stripped.find(':')
+            key = stripped[:colon_pos].strip()
+            value = stripped[colon_pos + 1:].strip()
+
+            # Find the right container based on indent
+            while indent_stack and indent_stack[-1][0] >= indent and len(indent_stack) > 1:
+                indent_stack.pop()
+
+            container = indent_stack[-1][1]
+
+            if value:
+                # Inline value
+                container[key] = _parse_yaml_value(value)
+            else:
+                # Nested structure or list follows
+                container[key] = {}
+                current_key = key
+                indent_stack.append((indent, container))
+
+        i += 1
+
+    return result
+
+
+def _parse_yaml_value(value: str) -> Any:
+    """Parse a YAML value string."""
+    if not value:
+        return None
+
+    # Remove quotes
+    if (value.startswith('"') and value.endswith('"')) or \
+       (value.startswith("'") and value.endswith("'")):
+        return value[1:-1]
+
+    # Boolean
+    if value.lower() == 'true':
+        return True
+    if value.lower() == 'false':
+        return False
+
+    # None
+    if value.lower() in ('null', '~', 'none'):
+        return None
+
+    # Number
+    try:
+        if '.' in value:
+            return float(value)
+        return int(value)
+    except ValueError:
+        pass
+
+    return value
+
+
 def load_yaml_file(file_path: Path) -> Dict:
     """Load a YAML file."""
     if not file_path.exists():
         return {}
 
+    text = file_path.read_text()
+
     try:
         import yaml
-        return yaml.safe_load(file_path.read_text()) or {}
+        return yaml.safe_load(text) or {}
     except ImportError:
-        return {}
+        # Fallback to simple parser
+        try:
+            return _simple_yaml_parse(text)
+        except Exception:
+            return {}
     except Exception:
         return {}
 

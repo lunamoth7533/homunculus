@@ -1,0 +1,30 @@
+---
+id: permission-gap-detector
+version: 1
+gap_type: permission
+priority: low
+enabled: true
+
+triggers:
+  - condition: "raw_json contains 'permission denied'"
+    confidence_boost: 0.35
+
+  - condition: "raw_json contains 'not authorized'"
+    confidence_boost: 0.35
+
+  - condition: "raw_json contains 'need approval'"
+    confidence_boost: 0.3
+
+  - condition: "raw_json contains 'access denied'"
+    confidence_boost: 0.35
+
+  - condition: "raw_json contains 'blocked'"
+    confidence_boost: 0.2
+
+min_confidence: 0.4
+
+scope_inference:
+  - if: "project"
+    then: project
+  - if: "default"
+    then: global

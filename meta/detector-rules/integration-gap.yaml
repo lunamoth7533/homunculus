@@ -1,0 +1,32 @@
+---
+id: integration-gap-detector
+version: 1
+gap_type: integration
+priority: medium
+enabled: true
+
+triggers:
+  - condition: "raw_json contains 'doesn''t connect'"
+    extract:
+      desired_capability: "regex: (.+) doesn't connect"
+    confidence_boost: 0.3
+
+  - condition: "raw_json contains 'can''t sync'"
+    confidence_boost: 0.25
+
+  - condition: "raw_json contains 'no integration'"
+    confidence_boost: 0.3
+
+  - condition: "raw_json contains 'doesn''t talk to'"
+    confidence_boost: 0.25
+
+  - condition: "raw_json contains 'incompatible'"
+    confidence_boost: 0.2
+
+min_confidence: 0.35
+
+scope_inference:
+  - if: "project"
+    then: project
+  - if: "default"
+    then: global

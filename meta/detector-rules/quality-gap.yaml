@@ -1,0 +1,36 @@
+---
+id: quality-gap-detector
+version: 1
+gap_type: quality
+priority: high
+enabled: true
+
+triggers:
+  - condition: "raw_json contains 'same mistake'"
+    confidence_boost: 0.35
+
+  - condition: "raw_json contains 'keep forgetting'"
+    confidence_boost: 0.3
+
+  - condition: "raw_json contains 'again'"
+    confidence_boost: 0.15
+
+  - condition: "raw_json contains 'introduced a bug'"
+    confidence_boost: 0.3
+
+  - condition: "raw_json contains 'broke'"
+    confidence_boost: 0.2
+
+  - condition: "raw_json contains 'regression'"
+    confidence_boost: 0.35
+
+  - condition: "raw_json contains 'should have'"
+    confidence_boost: 0.2
+
+min_confidence: 0.4
+
+scope_inference:
+  - if: "project"
+    then: project
+  - if: "default"
+    then: global
