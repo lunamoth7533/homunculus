@@ -3,6 +3,7 @@
 Homunculus core utilities.
 """
 
+import os
 import json
 import sqlite3
 import uuid
@@ -12,8 +13,8 @@ from pathlib import Path
 from typing import Any, Optional, Dict, List
 from contextlib import contextmanager
 
-# Paths
-HOMUNCULUS_ROOT = Path.home() / "homunculus"
+# Paths - use CLAUDE_PLUGIN_ROOT if available (for plugin mode), otherwise ~/homunculus
+HOMUNCULUS_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path.home() / "homunculus"))
 DB_PATH = HOMUNCULUS_ROOT / "homunculus.db"
 CONFIG_PATH = HOMUNCULUS_ROOT / "config.yaml"
 OBSERVATIONS_PATH = HOMUNCULUS_ROOT / "observations" / "current.jsonl"

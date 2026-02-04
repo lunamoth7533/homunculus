@@ -8,8 +8,9 @@ import sys
 from pathlib import Path
 from datetime import datetime, timezone
 
-HOMUNCULUS_ROOT = Path.home() / "homunculus"
-DB_PATH = HOMUNCULUS_ROOT / "homunculus.db"
+sys.path.insert(0, str(Path(__file__).parent))
+from utils import HOMUNCULUS_ROOT, DB_PATH
+
 SCHEMA_PATH = HOMUNCULUS_ROOT / "scripts" / "schema.sql"
 
 

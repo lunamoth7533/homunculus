@@ -1,0 +1,24 @@
+{
+  "name": "homunculus",
+  "version": "1.0.0",
+  "description": "Self-evolution system for Claude Code - automatic gap detection and capability synthesis with human-in-the-loop approval",
+  "author": {
+    "name": "lunamoth7533",
+    "email": ""
+  },
+  "homepage": "https://github.com/lunamoth7533/homunculus",
+  "repository": "https://github.com/lunamoth7533/homunculus",
+  "license": "MIT",
+  "keywords": [
+    "self-evolution",
+    "gap-detection",
+    "capability-synthesis",
+    "meta-learning",
+    "automation",
+    "skills",
+    "hooks",
+    "agents"
+  ],
+  "hooks": "./hooks/hooks.json",
+  "skills": "./skills/"
+}

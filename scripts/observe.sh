@@ -6,7 +6,8 @@
 
 set -euo pipefail
 
-HOMUNCULUS_ROOT="${HOME}/homunculus"
+# Use CLAUDE_PLUGIN_ROOT if available, otherwise fall back to ~/homunculus
+HOMUNCULUS_ROOT="${CLAUDE_PLUGIN_ROOT:-${HOME}/homunculus}"
 OBSERVATIONS_FILE="${HOMUNCULUS_ROOT}/observations/current.jsonl"
 SESSION_FILE="${HOMUNCULUS_ROOT}/.current_session"
 
