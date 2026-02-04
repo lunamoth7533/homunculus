@@ -26,13 +26,24 @@ from utils import (
 )
 from typing import Union
 from gap_types import get_gap_info, get_capability_types
+from template_renderer import TemplateRenderer, RenderContext, create_render_context
 
 
 def get_llm_client() -> Optional[Any]:
     """
     Get Claude API client if available.
     Returns None if API key not configured or anthropic package not installed.
+
+    NOTE: This function is deprecated in favor of LLMProviderChain.
+    Kept for backward compatibility.
     """
+    try:
+        from llm_providers import get_llm_client as _get_client
+        return _get_client()
+    except ImportError:
+        pass
+
+    # Fallback to direct implementation
     api_key = os.environ.get('ANTHROPIC_API_KEY')
     if not api_key:
         return None
@@ -44,6 +55,36 @@ def get_llm_client() -> Optional[Any]:
         return None
     except Exception:
         return None
+
+
+def get_synthesis_model() -> str:
+    """
+    Get the current synthesis model identifier.
+    Returns format: "provider:model" (e.g., "anthropic:claude-sonnet-4-20250514")
+    """
+    try:
+        from llm_providers import LLMProviderChain
+        chain = LLMProviderChain()
+        available = chain.get_available_providers()
+        if available:
+            provider = chain.providers.get(available[0])
+            if provider:
+                return provider.get_model_identifier()
+    except ImportError:
+        pass
+
+    # Fallback
+    if get_llm_client():
+        config = load_config()
+        model = config.get('synthesis', {}).get('synthesis_model', 'sonnet')
+        model_map = {
+            'sonnet': 'claude-sonnet-4-20250514',
+            'haiku': 'claude-3-5-haiku-20241022',
+            'opus': 'claude-opus-4-20250514',
+        }
+        return f"anthropic:{model_map.get(model, model)}"
+
+    return "template-based"
 
 
 def llm_enhance_content(
@@ -119,6 +160,7 @@ class SynthesisTemplate:
     applicable_gap_types: List[str]
     structure: str
     synthesis_prompt: str
+    output_files: Optional[List[Dict[str, str]]] = None  # Multi-file support
 
     @classmethod
     def from_yaml(cls, data: Dict[str, Any]) -> 'SynthesisTemplate':
@@ -129,7 +171,8 @@ class SynthesisTemplate:
             output_path=data.get('output_path', ''),
             applicable_gap_types=data.get('applicable_gap_types', []),
             structure=data.get('structure', ''),
-            synthesis_prompt=data.get('synthesis_prompt', '')
+            synthesis_prompt=data.get('synthesis_prompt', ''),
+            output_files=data.get('output_files')  # Multi-file support
         )
 
 
@@ -306,9 +349,29 @@ class CapabilitySynthesizer:
         # Generate capability name from desired capability
         name = self._generate_name(gap.get('desired_capability', ''), gap.get('domain', ''))
         slug = self._slugify(name)
+        timestamp = get_timestamp()
 
-        # Generate the capability content
-        content = self._generate_content(template, gap, name, slug)
+        # Create render context for template substitution
+        render_context = create_render_context(gap, name, slug, timestamp)
+
+        # Check if template uses multi-file output
+        if template.output_files:
+            # Multi-file rendering
+            files = self._generate_multi_file_content(template, gap, render_context)
+            # Build rollback instructions for all files
+            rollback_paths = [f['path'] for f in files]
+            rollback_instructions = "rm -f " + " ".join(
+                f"~/homunculus/{p}" for p in rollback_paths
+            )
+        else:
+            # Single file rendering (original behavior)
+            content = self._generate_content(template, gap, name, slug)
+            files = [{
+                "path": template.output_path.format(slug=slug),
+                "content": content,
+                "action": "create"
+            }]
+            rollback_instructions = f"rm ~/homunculus/{template.output_path.format(slug=slug)}"
 
         # Create proposal
         proposal = Proposal(
@@ -324,16 +387,45 @@ class CapabilitySynthesizer:
             template_id=base_template.id,  # Use base template ID for tracking
             template_version=base_template.version,
             template_variant=variant_name,  # A/B testing variant
-            files=[{
-                "path": template.output_path.format(slug=slug),
-                "content": content,
-                "action": "create"
-            }],
-            rollback_instructions=f"rm ~/homunculus/{template.output_path.format(slug=slug)}",
+            files=files,
+            rollback_instructions=rollback_instructions,
             project_path=gap.get('project_path')
         )
 
         return proposal
+
+    def _generate_multi_file_content(
+        self,
+        template: SynthesisTemplate,
+        gap: Dict[str, Any],
+        render_context: RenderContext
+    ) -> List[Dict[str, str]]:
+        """Generate content for multi-file templates."""
+        if not template.output_files:
+            return []
+
+        # Use the template renderer for multi-file output
+        rendered_files = TemplateRenderer.render_multi_file(
+            template.output_files,
+            render_context
+        )
+
+        # Optionally enhance with LLM if available
+        if template.synthesis_prompt and get_llm_client():
+            enhanced_files = []
+            for file_info in rendered_files:
+                enhanced_content = llm_enhance_content(
+                    file_info['content'],
+                    gap,
+                    template.output_type,
+                    template.synthesis_prompt
+                )
+                if enhanced_content:
+                    file_info['content'] = enhanced_content
+                enhanced_files.append(file_info)
+            return enhanced_files
+
+        return rendered_files
 
     def _generate_name(self, desired_capability: str, domain: Optional[str]) -> str:
         """Generate a capability name from the desired capability."""
@@ -765,6 +857,9 @@ Add to `~/.claude/settings.json`:
 
     def save_proposal(self, proposal: Proposal) -> bool:
         """Save a proposal to the database."""
+        # Get the actual synthesis model used
+        synthesis_model = get_synthesis_model()
+
         try:
             with get_db_connection(self.db_path) as conn:
                 conn.execute("""
@@ -788,7 +883,7 @@ Add to `~/.claude/settings.json`:
                     proposal.template_id,
                     proposal.template_version,
                     proposal.template_variant,  # A/B testing variant
-                    "template-based",  # synthesis_model
+                    synthesis_model,  # Dynamic: "provider:model" or "template-based"
                     json.dumps(proposal.files),
                     proposal.rollback_instructions
                 ))

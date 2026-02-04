@@ -19,7 +19,7 @@ import logging
 import sqlite3
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 # Determine paths
 HOMUNCULUS_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path.home() / "homunculus"))
@@ -168,19 +168,30 @@ def generate_id() -> str:
         return f'obs-{int(time.time() * 1000)}'
 
 
-def parse_input() -> Dict[str, Any]:
-    """Safely parse input from stdin."""
+def parse_input() -> Tuple[Dict[str, Any], bool]:
+    """
+    Safely parse input from stdin.
+
+    Returns:
+        Tuple of (data, is_fallback) where is_fallback is True if parsing failed
+        and a fallback observation was created.
+    """
     try:
         input_json = sys.stdin.read()
         if not input_json or not input_json.strip():
-            return {}
-        return json.loads(input_json)
+            return {}, False
+        return json.loads(input_json), False
     except json.JSONDecodeError as e:
         logger.warning(f"JSON decode error: {e}")
-        return {}
+        # Create fallback observation with raw preview
+        return {
+            "_fallback": True,
+            "_parse_error": str(e),
+            "_raw_preview": (input_json or "")[:500]
+        }, True
     except Exception as e:
         logger.error(f"Error reading stdin: {e}")
-        return {}
+        return {"_fallback": True, "_error": str(e)}, True
 
 
 def extract_tool_info(event_type: str, input_data: Dict[str, Any]) -> tuple:
@@ -210,7 +221,8 @@ def build_observation(
     timestamp: str,
     session_id: str,
     project_path: Optional[str],
-    input_data: Dict[str, Any]
+    input_data: Dict[str, Any],
+    is_fallback: bool = False
 ) -> Dict[str, Any]:
     """Build the observation dictionary."""
 
@@ -241,6 +253,10 @@ def build_observation(
     if tool_error:
         obs['tool_error'] = tool_error
 
+    # Mark as fallback if parsing failed
+    if is_fallback:
+        obs['parse_fallback'] = 1
+
     return obs
 
 
@@ -261,10 +277,10 @@ def main():
         logger.debug(f"Processing {event_type} event for session {session_id[:12]}...")
 
         # Read input from stdin safely
-        input_data = parse_input()
+        input_data, is_fallback = parse_input()
 
-        # Skip if empty (this is normal for some events)
-        if not input_data:
+        # Skip if empty and not a fallback (empty is normal for some events)
+        if not input_data and not is_fallback:
             logger.debug("Empty input data, skipping")
             sys.exit(0)
 
@@ -280,7 +296,7 @@ def main():
             logger.info(f"New session started: {session_id}")
 
         # Build observation
-        obs = build_observation(event_type, timestamp, session_id, project_path, input_data)
+        obs = build_observation(event_type, timestamp, session_id, project_path, input_data, is_fallback)
 
         # Output JSON to stdout (observe.sh will redirect to file)
         print(json.dumps(obs))

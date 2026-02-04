@@ -177,6 +177,69 @@ def check_size_limit() -> Dict[str, Any]:
     }
 
 
+def should_auto_archive() -> bool:
+    """
+    Check if auto-archive should run based on thresholds.
+
+    Returns True if:
+    - Size is above 50% of limit, OR
+    - More than 24 hours since last archive, OR
+    - More than 1000 observations in current.jsonl
+    """
+    config = load_config()
+    storage_config = config.get('storage', {})
+    max_mb = storage_config.get('observations_max_mb', 50)
+    archive_after_days = storage_config.get('archive_after_days', 7)
+
+    current_file = HOMUNCULUS_ROOT / "observations" / "current.jsonl"
+
+    if not current_file.exists():
+        return False
+
+    # Check size threshold (50%)
+    size_info = check_size_limit()
+    if size_info['percent_used'] > 50:
+        return True
+
+    # Check observation count (more than 1000)
+    observations = read_jsonl(current_file)
+    if len(observations) > 1000:
+        return True
+
+    # Check time since last archive
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                "SELECT value FROM metadata WHERE key = 'last_archive_run'"
+            )
+            row = cursor.fetchone()
+            if row:
+                last_run = datetime.fromisoformat(row[0].replace('Z', '+00:00'))
+                if datetime.now(last_run.tzinfo) - last_run > timedelta(hours=24):
+                    return True
+            else:
+                # Never run before
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
+def record_archive_run() -> None:
+    """Record the last archive run timestamp in metadata."""
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO metadata (key, value, updated_at)
+                   VALUES ('last_archive_run', ?, ?)""",
+                (get_timestamp(), get_timestamp())
+            )
+            conn.commit()
+    except Exception as e:
+        print(f"Warning: Could not record archive run: {e}")
+
+
 def main():
     import argparse
 
@@ -184,6 +247,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Show what would be archived")
     parser.add_argument("--cleanup", action="store_true", help="Remove old archives (>30 days)")
     parser.add_argument("--status", action="store_true", help="Show current observation status")
+    parser.add_argument("--auto", action="store_true",
+                        help="Only archive if thresholds are met (for automatic runs)")
 
     args = parser.parse_args()
 
@@ -204,6 +269,12 @@ def main():
             print("No old archives to remove")
         return 0
 
+    # Auto mode: check thresholds first
+    if args.auto:
+        if not should_auto_archive():
+            # Silently exit - thresholds not met
+            return 0
+
     # Default: archive observations
     result = archive_observations(dry_run=args.dry_run)
 
@@ -213,6 +284,8 @@ def main():
     else:
         if result['archived_count'] > 0:
             print(f"Archived {result['archived_count']} observations to {result['archive_file']}")
+            # Record the archive run
+            record_archive_run()
         else:
             print("No observations to archive")
         print(f"{result['current_remaining']} observations in current.jsonl")

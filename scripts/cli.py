@@ -1089,6 +1089,285 @@ def cmd_meta_status(args):
     return 0
 
 
+def cmd_meta_proposals(args):
+    """List pending meta-proposals."""
+    from meta_synthesizer import get_pending_meta_proposals
+
+    db_path = get_db_for_args(args)
+    proposals = get_pending_meta_proposals(db_path)
+
+    print()
+    print("=" * 60)
+    print("PENDING META-PROPOSALS")
+    print("=" * 60)
+
+    if not proposals:
+        print()
+        print("  No pending meta-proposals.")
+        print()
+        print("  Run 'homunculus meta-status --analyze' to generate proposals.")
+        print()
+        return 0
+
+    print()
+    for i, p in enumerate(proposals, 1):
+        print(f"  {i}. [{p['proposal_type'].upper()}] {p['id'][:12]}")
+        print(f"     Target: {p['target_id']}")
+        print(f"     Confidence: {p['confidence']:.0%}")
+        print(f"     Reasoning: {(p['reasoning'] or '')[:50]}...")
+        print()
+
+    print("-" * 60)
+    print("Commands:")
+    print("  homunculus meta-review <id>   - View proposal details")
+    print("  homunculus meta-approve <id>  - Apply proposal")
+    print("  homunculus meta-reject <id>   - Reject proposal")
+    print()
+
+    return 0
+
+
+def cmd_meta_review(args):
+    """Review a meta-proposal in detail."""
+    from meta_synthesizer import get_meta_proposal
+    import json
+
+    db_path = get_db_for_args(args)
+    proposal_id = args.proposal_id
+
+    proposal = get_meta_proposal(proposal_id, db_path)
+    if not proposal:
+        print(f"\nMeta-proposal not found: {proposal_id}")
+        return 1
+
+    print()
+    print("=" * 70)
+    print(f"META-PROPOSAL REVIEW: {proposal['id']}")
+    print("=" * 70)
+    print()
+    print(f"  Type: {proposal['proposal_type']}")
+    print(f"  Target: {proposal['target_id']}")
+    print(f"  Status: {proposal['status']}")
+    print(f"  Confidence: {proposal['confidence']:.0%}")
+    print(f"  Created: {proposal['created_at']}")
+    print()
+    print("-" * 50)
+    print("REASONING")
+    print("-" * 50)
+    print(f"  {proposal['reasoning']}")
+    print()
+    print("-" * 50)
+    print("PROPOSED CHANGES")
+    print("-" * 50)
+
+    try:
+        changes = json.loads(proposal.get('proposed_changes_json', '{}'))
+        for key, value in changes.items():
+            print(f"  {key}: {value}")
+    except json.JSONDecodeError:
+        print("  (No changes data)")
+
+    print()
+    print("=" * 70)
+    print("ACTIONS")
+    print("=" * 70)
+
+    if proposal['status'] == 'pending':
+        print(f"  Approve: homunculus meta-approve {proposal['id'][:12]}")
+        print(f"  Reject:  homunculus meta-reject {proposal['id'][:12]} --reason \"...\"")
+    else:
+        print(f"  Status is '{proposal['status']}' - no actions available")
+
+    print()
+    return 0
+
+
+def cmd_meta_approve(args):
+    """Approve and apply a meta-proposal."""
+    from meta_synthesizer import MetaSynthesizer, get_meta_proposal
+
+    db_path = get_db_for_args(args)
+    proposal_id = args.proposal_id
+
+    # Verify proposal exists
+    proposal = get_meta_proposal(proposal_id, db_path)
+    if not proposal:
+        print(f"\nMeta-proposal not found: {proposal_id}")
+        return 1
+
+    if proposal['status'] != 'pending':
+        print(f"\nProposal is not pending (status: {proposal['status']})")
+        return 1
+
+    print()
+    print(f"Approving meta-proposal: {proposal['id'][:12]}")
+    print(f"  Type: {proposal['proposal_type']}")
+    print(f"  Target: {proposal['target_id']}")
+    print()
+
+    # Confirm
+    confirm = input("Apply this meta-proposal? [y/N]: ").strip().lower()
+    if confirm not in ('y', 'yes'):
+        print("\nCancelled.")
+        return 0
+
+    # Apply
+    synthesizer = MetaSynthesizer(db_path)
+    result = synthesizer.apply_proposal(proposal['id'])
+
+    if result['success']:
+        print()
+        print("Meta-proposal applied successfully!")
+        print(f"  Changes:")
+        for change in result.get('changes_applied', []):
+            print(f"    - {change}")
+    else:
+        print()
+        print(f"Failed to apply: {result['message']}")
+        return 1
+
+    print()
+    return 0
+
+
+def cmd_meta_reject(args):
+    """Reject a meta-proposal."""
+    from meta_synthesizer import MetaSynthesizer, get_meta_proposal
+
+    db_path = get_db_for_args(args)
+    proposal_id = args.proposal_id
+    reason = getattr(args, 'reason', '') or "User rejected"
+
+    # Verify proposal exists
+    proposal = get_meta_proposal(proposal_id, db_path)
+    if not proposal:
+        print(f"\nMeta-proposal not found: {proposal_id}")
+        return 1
+
+    if proposal['status'] != 'pending':
+        print(f"\nProposal is not pending (status: {proposal['status']})")
+        return 1
+
+    print()
+    print(f"Rejecting meta-proposal: {proposal['id'][:12]}")
+    print(f"  Reason: {reason}")
+
+    synthesizer = MetaSynthesizer(db_path)
+    if synthesizer.reject_proposal(proposal['id'], reason):
+        print("\nMeta-proposal rejected.")
+    else:
+        print("\nFailed to reject proposal.")
+        return 1
+
+    print()
+    return 0
+
+
+def cmd_auth(args):
+    """Manage LLM provider authentication."""
+    from llm_providers import (
+        store_anthropic_key, clear_anthropic_key,
+        LLMProviderChain, CREDENTIALS_PATH
+    )
+    import getpass
+
+    action = getattr(args, 'action', 'status')
+    provider = getattr(args, 'provider', None)
+
+    if action == 'status':
+        print()
+        print("=" * 60)
+        print("LLM PROVIDER STATUS")
+        print("=" * 60)
+        print()
+
+        chain = LLMProviderChain()
+        status = chain.get_provider_status()
+
+        for name, info in status.items():
+            available = "Yes" if info['available'] else "No"
+            model = info['model'] or "N/A"
+            in_chain = "Yes" if info['in_chain'] else "No"
+            print(f"  {name.upper()}")
+            print(f"    Available: {available}")
+            print(f"    Model: {model}")
+            print(f"    In fallback chain: {in_chain}")
+            print()
+
+        print(f"  Provider order: {chain.provider_order}")
+        print(f"  Active providers: {chain.get_available_providers()}")
+        print()
+
+        if CREDENTIALS_PATH.exists():
+            print(f"  Credentials file: {CREDENTIALS_PATH}")
+        else:
+            print("  Credentials file: Not created")
+
+        print()
+        print("Commands:")
+        print("  homunculus auth anthropic     - Configure Anthropic API key")
+        print("  homunculus auth clear         - Remove stored credentials")
+        print()
+        return 0
+
+    elif action == 'anthropic' or provider == 'anthropic':
+        print()
+        print("CONFIGURE ANTHROPIC API KEY")
+        print("-" * 40)
+        print()
+        print("Your API key will be stored securely in:")
+        print(f"  {CREDENTIALS_PATH}")
+        print()
+
+        api_key = getpass.getpass("Enter your Anthropic API key: ")
+
+        if not api_key or not api_key.strip():
+            print("\nNo API key provided. Cancelled.")
+            return 1
+
+        api_key = api_key.strip()
+
+        # Basic validation
+        if not api_key.startswith('sk-'):
+            print("\nWarning: API key doesn't start with 'sk-'. Are you sure it's correct?")
+            confirm = input("Continue anyway? [y/N]: ").strip().lower()
+            if confirm not in ('y', 'yes'):
+                print("Cancelled.")
+                return 1
+
+        if store_anthropic_key(api_key):
+            print("\nAPI key stored successfully!")
+            print()
+
+            # Test the connection
+            print("Testing connection...")
+            chain = LLMProviderChain()
+            if chain.providers['anthropic'].is_available():
+                print("  Connection successful!")
+            else:
+                print("  Warning: Could not verify connection")
+        else:
+            print("\nFailed to store API key")
+            return 1
+
+        print()
+        return 0
+
+    elif action == 'clear':
+        print()
+        if clear_anthropic_key():
+            print("Credentials cleared successfully.")
+        else:
+            print("Failed to clear credentials.")
+            return 1
+        print()
+        return 0
+
+    else:
+        print(f"Unknown auth action: {action}")
+        return 1
+
+
 def cmd_projects(args):
     """List project-scoped databases."""
     print()
@@ -1162,6 +1441,14 @@ def main():
     # projects
     subparsers.add_parser("projects", help="List project-scoped databases")
 
+    # auth
+    auth_parser = subparsers.add_parser("auth", help="Manage LLM provider authentication")
+    auth_parser.add_argument("action", nargs="?", default="status",
+                             choices=["status", "anthropic", "clear"],
+                             help="Action: status (default), anthropic, or clear")
+    auth_parser.add_argument("provider", nargs="?",
+                             help="Provider name (for compatibility)")
+
     # status
     subparsers.add_parser("status", help="Show system status")
 
@@ -1229,6 +1516,22 @@ def main():
     meta_parser = subparsers.add_parser("meta-status", help="Show meta-evolution status")
     meta_parser.add_argument("--analyze", action="store_true", help="Run meta-analysis")
 
+    # meta-proposals
+    subparsers.add_parser("meta-proposals", help="List pending meta-proposals")
+
+    # meta-review
+    meta_review_parser = subparsers.add_parser("meta-review", help="Review a meta-proposal")
+    meta_review_parser.add_argument("proposal_id", help="Meta-proposal ID to review")
+
+    # meta-approve
+    meta_approve_parser = subparsers.add_parser("meta-approve", help="Approve a meta-proposal")
+    meta_approve_parser.add_argument("proposal_id", help="Meta-proposal ID to approve")
+
+    # meta-reject
+    meta_reject_parser = subparsers.add_parser("meta-reject", help="Reject a meta-proposal")
+    meta_reject_parser.add_argument("proposal_id", help="Meta-proposal ID to reject")
+    meta_reject_parser.add_argument("--reason", help="Rejection reason")
+
     # variants (A/B testing)
     variants_parser = subparsers.add_parser("variants", help="Manage template variants for A/B testing")
     variants_parser.add_argument("action", nargs="?", default="list",
@@ -1253,6 +1556,7 @@ def main():
         "init": cmd_init,
         "status": cmd_status,
         "projects": cmd_projects,
+        "auth": cmd_auth,
         "gaps": cmd_gaps,
         "gap": cmd_gap,
         "proposals": cmd_proposals,
@@ -1267,6 +1571,10 @@ def main():
         "dependencies": cmd_dependencies,
         "dismiss-gap": cmd_dismiss_gap,
         "meta-status": cmd_meta_status,
+        "meta-proposals": cmd_meta_proposals,
+        "meta-review": cmd_meta_review,
+        "meta-approve": cmd_meta_approve,
+        "meta-reject": cmd_meta_reject,
         "variants": cmd_variants,
     }
 

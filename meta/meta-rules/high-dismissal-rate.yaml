@@ -1,0 +1,22 @@
+---
+id: high-dismissal-rate
+version: 1
+target_type: detector
+description: Detects when a detector rule has a high dismissal rate, indicating too many false positives
+
+conditions:
+  - field: dismissal_rate
+    operator: ">"
+    value: 0.5
+  - field: gaps_detected
+    operator: ">="
+    value: 3
+
+insight_template: "Detector {subject_id} has {dismissal_rate:.0%} dismissal rate over {gaps_detected} gaps"
+
+min_confidence: 0.5
+proposal_type: detector_patch
+
+recommended_action: |
+  Consider increasing the min_confidence threshold for this detector
+  to reduce false positive detections.

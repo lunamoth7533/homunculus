@@ -1,0 +1,23 @@
+---
+id: unused-capability
+version: 1
+target_type: capability
+description: Detects capabilities with zero usage after extended installation period
+
+conditions:
+  - field: usage_count
+    operator: "=="
+    value: 0
+  - field: days_installed
+    operator: ">="
+    value: 14
+
+insight_template: "Capability {subject_id} has zero usage after {days_installed} days installed"
+
+min_confidence: 0.6
+proposal_type: deprecate
+
+recommended_action: |
+  Consider deprecating this capability. It has had no recorded usage
+  since installation, suggesting it may not be useful or discoverable.
+  Alternatively, improve documentation or trigger conditions.
