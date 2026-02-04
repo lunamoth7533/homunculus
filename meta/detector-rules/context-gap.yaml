@@ -14,7 +14,7 @@ triggers:
   - condition: "raw_json contains 'lost track'"
     confidence_boost: 0.25
 
-  - condition: "raw_json contains 'don''t remember'"
+  - condition: 'raw_json contains "don''t remember"'
     confidence_boost: 0.25
 
   - condition: "raw_json contains 'what we decided'"

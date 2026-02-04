@@ -1,0 +1,22 @@
+---
+id: low-approval-rate
+version: 1
+target_type: detector
+description: Detects when a detector's proposals have a low approval rate
+
+conditions:
+  - field: approval_rate
+    operator: "<"
+    value: 0.3
+  - field: proposals_generated
+    operator: ">="
+    value: 3
+
+insight_template: "Detector {subject_id} has only {approval_rate:.0%} approval rate ({proposals_installed}/{proposals_generated} approved)"
+
+min_confidence: 0.5
+proposal_type: detector_patch
+
+recommended_action: |
+  Review the detector criteria. Gaps detected may not be actionable
+  or the synthesis templates may not be producing useful output.

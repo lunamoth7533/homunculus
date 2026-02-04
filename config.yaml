@@ -26,3 +26,7 @@ scoping:
 storage:
   observations_max_mb: 50
   archive_after_days: 7
+
+usage_tracking:
+  enabled: true
+  raw_json_max_chars: 2000

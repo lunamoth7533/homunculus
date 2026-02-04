@@ -6,7 +6,7 @@ priority: low
 enabled: true
 
 triggers:
-  - condition: "raw_json contains 'don''t know what I don''t know'"
+  - condition: 'raw_json contains "don''t know what I don''t know"'
     confidence_boost: 0.4
 
   - condition: "raw_json contains 'blind spot'"

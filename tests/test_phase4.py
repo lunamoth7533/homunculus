@@ -280,7 +280,7 @@ class TestInstallWorkflow(TestCase):
 
         # Check proposal status was updated
         proposal = get_proposal(self.test_proposal_id)
-        self.assertEqual(proposal['status'], 'approved')
+        self.assertEqual(proposal['status'], 'installed')
 
         # Check capability was created
         capability = get_capability('test-workflow-skill')

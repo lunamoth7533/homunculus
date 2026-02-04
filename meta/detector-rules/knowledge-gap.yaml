@@ -6,7 +6,7 @@ priority: medium
 enabled: true
 
 triggers:
-  - condition: "raw_json contains 'don''t understand'"
+  - condition: 'raw_json contains "don''t understand"'
     extract:
       desired_capability: "regex: don't understand ([^.]+)"
     confidence_boost: 0.25

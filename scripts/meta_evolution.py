@@ -61,7 +61,7 @@ class MetaEvolutionEngine:
                 g.detector_rule_version,
                 COUNT(DISTINCT g.id) as gaps_detected,
                 COUNT(DISTINCT p.id) as proposals_generated,
-                SUM(CASE WHEN p.status = 'approved' THEN 1 ELSE 0 END) as proposals_approved,
+                SUM(CASE WHEN p.status = 'installed' THEN 1 ELSE 0 END) as proposals_installed,
                 SUM(CASE WHEN p.status = 'rejected' THEN 1 ELSE 0 END) as proposals_rejected,
                 SUM(CASE WHEN g.status = 'dismissed' THEN 1 ELSE 0 END) as gaps_dismissed,
                 SUM(CASE WHEN g.status = 'resolved' THEN 1 ELSE 0 END) as gaps_resolved,
@@ -80,7 +80,7 @@ class MetaEvolutionEngine:
                 p.template_id,
                 p.template_version,
                 COUNT(DISTINCT p.id) as proposals_generated,
-                SUM(CASE WHEN p.status = 'approved' THEN 1 ELSE 0 END) as approved,
+                SUM(CASE WHEN p.status = 'installed' THEN 1 ELSE 0 END) as installed,
                 SUM(CASE WHEN p.status = 'rejected' THEN 1 ELSE 0 END) as rejected,
                 SUM(CASE WHEN p.status = 'rolled_back' THEN 1 ELSE 0 END) as rolled_back,
                 AVG(p.confidence) as avg_confidence,
@@ -95,8 +95,8 @@ class MetaEvolutionEngine:
         """Analyze a detector's performance and generate observations."""
         detector_id = metrics['detector_rule_id']
         gaps_detected = metrics['gaps_detected'] or 0
-        proposals_approved = metrics['proposals_approved'] or 0
-        proposals_rejected = metrics['proposals_rejected'] or 0
+        proposals_approved = metrics.get('proposals_installed') or metrics.get('proposals_approved') or 0
+        proposals_rejected = metrics.get('proposals_rejected') or 0
         gaps_dismissed = metrics['gaps_dismissed'] or 0
 
         # Calculate rates
@@ -150,11 +150,11 @@ class MetaEvolutionEngine:
     def analyze_template_performance(self, metrics: Dict[str, Any]) -> Optional[MetaObservation]:
         """Analyze a template's performance and generate observations."""
         template_id = metrics['template_id']
-        proposals_generated = metrics['proposals_generated'] or 0
-        approved = metrics['approved'] or 0
-        rejected = metrics['rejected'] or 0
-        rolled_back = metrics['rolled_back'] or 0
-        capabilities_active = metrics['capabilities_active'] or 0
+        proposals_generated = metrics.get('proposals_generated') or 0
+        approved = metrics.get('installed') or metrics.get('approved') or 0
+        rejected = metrics.get('rejected') or 0
+        rolled_back = metrics.get('rolled_back') or 0
+        capabilities_active = metrics.get('capabilities_active') or 0
 
         total_outcomes = approved + rejected
         if total_outcomes == 0:
@@ -415,9 +415,12 @@ class MetaEvolutionEngine:
         # Get detector health summary
         detector_metrics = self.collect_detector_metrics()
         for m in detector_metrics[:5]:  # Top 5
-            total = (m['proposals_approved'] or 0) + (m['proposals_rejected'] or 0) + (m['gaps_dismissed'] or 0)
+            installed = m.get('proposals_installed') or m.get('proposals_approved') or 0
+            rejected = m.get('proposals_rejected') or 0
+            dismissed = m.get('gaps_dismissed') or 0
+            total = installed + rejected + dismissed
             if total > 0:
-                rate = (m['proposals_approved'] or 0) / total
+                rate = installed / total
                 status['detector_health'].append({
                     'id': m['detector_rule_id'],
                     'gaps': m['gaps_detected'],
@@ -427,9 +430,11 @@ class MetaEvolutionEngine:
         # Get template health summary
         template_metrics = self.collect_template_metrics()
         for m in template_metrics[:5]:  # Top 5
-            total = (m['approved'] or 0) + (m['rejected'] or 0)
+            installed = m.get('installed') or m.get('approved') or 0
+            rejected = m.get('rejected') or 0
+            total = installed + rejected
             if total > 0:
-                rate = (m['approved'] or 0) / total
+                rate = installed / total
                 status['template_health'].append({
                     'id': m['template_id'],
                     'proposals': m['proposals_generated'],

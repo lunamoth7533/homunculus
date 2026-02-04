@@ -211,10 +211,13 @@ def main():
         return 0
 
     if args.force:
-        set_last_detection_time(db_path=db_path)
+        # Record attempt for visibility
+        set_last_attempt_time(db_path=db_path)
         decayed = apply_confidence_decay(db_path=db_path)
         from detector import run_detection
         gaps = run_detection(db_path=db_path)
+        # Only record successful detection AFTER it completes
+        set_last_detection_time(db_path=db_path)
         print(f"Detection complete. Found {len(gaps)} gap(s). Decayed {decayed} old gaps.")
         return 0
 

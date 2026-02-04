@@ -9,10 +9,10 @@ triggers:
   - condition: "raw_json contains 'stuck'"
     confidence_boost: 0.3
 
-  - condition: "raw_json contains 'don''t know how to recover'"
+  - condition: 'raw_json contains "don''t know how to recover"'
     confidence_boost: 0.4
 
-  - condition: "raw_json contains 'can''t proceed'"
+  - condition: 'raw_json contains "can''t proceed"'
     confidence_boost: 0.3
 
   - condition: "raw_json contains 'dead end'"

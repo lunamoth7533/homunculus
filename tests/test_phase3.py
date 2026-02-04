@@ -197,6 +197,7 @@ class TestProposal(TestCase):
             reasoning="Test reasoning",
             template_id="skill-template",
             template_version=1,
+            template_variant=None,  # A/B testing variant
             files=[{"path": "test.md", "content": "test", "action": "create"}],
             rollback_instructions="rm test.md"
         )

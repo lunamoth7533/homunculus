@@ -43,17 +43,37 @@ observe() {
     local session_id
     local timestamp
     local project_path
+    local temp_input
+    local random_part
 
     session_id=$(get_session_id)
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     project_path="${PWD:-}"
 
+    # Capture stdin to temp file for fallback recovery
+    random_part=$(head -c 8 /dev/urandom 2>/dev/null | xxd -p 2>/dev/null || echo "$$")
+    temp_input="/tmp/homunculus_input_${random_part}"
+
+    # Read stdin to temp file
+    cat > "$temp_input" 2>/dev/null || true
+
     # Pipe stdin to Python script, which handles JSON safely
     # The Python script outputs the observation JSON to stdout
     if [[ -f "$PROCESS_SCRIPT" ]]; then
-        python3 "$PROCESS_SCRIPT" "$event_type" "$timestamp" "$session_id" "$project_path" \
-            >> "$OBSERVATIONS_FILE" 2>/dev/null || true
+        if ! python3 "$PROCESS_SCRIPT" "$event_type" "$timestamp" "$session_id" "$project_path" \
+            < "$temp_input" >> "$OBSERVATIONS_FILE" 2>/dev/null; then
+            # Python script failed - write fallback observation directly
+            local fallback_id="obs-fallback-${random_part}"
+            local raw_preview
+            raw_preview=$(head -c 500 "$temp_input" 2>/dev/null | tr '\n' ' ' | sed 's/"/\\"/g' || echo "")
+            cat >> "$OBSERVATIONS_FILE" 2>/dev/null <<EOF || true
+{"id": "${fallback_id}", "timestamp": "${timestamp}", "session_id": "${session_id}", "event_type": "${event_type}", "parse_fallback": 1, "raw_json": "{\"_fallback\": true, \"_raw_preview\": \"${raw_preview}\"}", "processed": 0}
+EOF
+        fi
     fi
+
+    # Clean up temp file
+    rm -f "$temp_input" 2>/dev/null || true
 }
 
 # Handle stop event (end of session)
@@ -81,6 +101,9 @@ end_session('${session_id}', '${timestamp}')
 
     # Run periodic detection if interval has passed
     python3 "${HOMUNCULUS_ROOT}/scripts/periodic_detection.py" 2>/dev/null &
+
+    # Run auto-archive if thresholds are met
+    python3 "${HOMUNCULUS_ROOT}/scripts/archive_observations.py" --auto 2>/dev/null &
 
     # Clean up session file
     rm -f "$SESSION_FILE" 2>/dev/null || true
