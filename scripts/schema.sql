@@ -171,6 +171,25 @@ CREATE INDEX IF NOT EXISTS idx_capabilities_scope ON capabilities(scope);
 CREATE INDEX IF NOT EXISTS idx_capabilities_status ON capabilities(status);
 
 -- ============================================================
+-- CAPABILITY DEPENDENCIES
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS capability_dependencies (
+    capability_id TEXT NOT NULL,
+    depends_on_id TEXT NOT NULL,
+    dependency_type TEXT NOT NULL CHECK (dependency_type IN ('required', 'optional', 'suggested')),
+    added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    notes TEXT,
+
+    PRIMARY KEY (capability_id, depends_on_id),
+    FOREIGN KEY (capability_id) REFERENCES capabilities(id) ON DELETE CASCADE,
+    FOREIGN KEY (depends_on_id) REFERENCES capabilities(id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_capability_dependencies_capability ON capability_dependencies(capability_id);
+CREATE INDEX IF NOT EXISTS idx_capability_dependencies_depends_on ON capability_dependencies(depends_on_id);
+
+-- ============================================================
 -- CAPABILITY USAGE
 -- ============================================================
 
@@ -377,3 +396,30 @@ CREATE VIEW IF NOT EXISTS v_active_gaps AS
 SELECT * FROM gaps
 WHERE status IN ('pending', 'synthesizing')
 ORDER BY confidence DESC, detected_at DESC;
+
+CREATE VIEW IF NOT EXISTS v_capability_dependencies AS
+SELECT
+    cd.capability_id,
+    c1.name as capability_name,
+    cd.depends_on_id,
+    c2.name as depends_on_name,
+    cd.dependency_type,
+    cd.added_at,
+    cd.notes
+FROM capability_dependencies cd
+JOIN capabilities c1 ON cd.capability_id = c1.id
+JOIN capabilities c2 ON cd.depends_on_id = c2.id
+WHERE c1.status = 'active' AND c2.status = 'active';
+
+CREATE VIEW IF NOT EXISTS v_capability_dependents AS
+SELECT
+    cd.depends_on_id as capability_id,
+    c2.name as capability_name,
+    cd.capability_id as dependent_id,
+    c1.name as dependent_name,
+    cd.dependency_type,
+    cd.added_at
+FROM capability_dependencies cd
+JOIN capabilities c1 ON cd.capability_id = c1.id
+JOIN capabilities c2 ON cd.depends_on_id = c2.id
+WHERE c1.status = 'active' AND c2.status = 'active';

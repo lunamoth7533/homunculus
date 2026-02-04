@@ -323,8 +323,14 @@ def reject_proposal(proposal_id: str, reason: str = "") -> bool:
         return False
 
 
-def rollback_capability(capability_id: str) -> InstallationResult:
-    """Rollback an installed capability."""
+def rollback_capability(capability_id: str, force: bool = False) -> InstallationResult:
+    """
+    Rollback an installed capability.
+
+    Args:
+        capability_id: ID or name of capability to rollback
+        force: If True, rollback even with optional dependents (still blocks on required)
+    """
     capability = get_capability(capability_id)
     if not capability:
         return InstallationResult(
@@ -341,6 +347,29 @@ def rollback_capability(capability_id: str) -> InstallationResult:
             message=f"Capability is not active (status: {capability['status']})",
             files_created=[]
         )
+
+    # Check for dependents
+    rollback_check = check_rollback_safe(capability['id'])
+    if not rollback_check['safe']:
+        return InstallationResult(
+            success=False,
+            capability_id=capability['id'],
+            message=rollback_check['message'],
+            files_created=[]
+        )
+
+    # Warn about optional dependents if not forcing
+    if rollback_check['dependents'] and not force:
+        optional_deps = [d for d in rollback_check['dependents']
+                        if d['dependency_type'] in ('optional', 'suggested')]
+        if optional_deps:
+            cap_names = [d['capability_name'] for d in optional_deps]
+            return InstallationResult(
+                success=False,
+                capability_id=capability['id'],
+                message=f"Has optional dependents: {', '.join(cap_names)}. Use --force to rollback anyway.",
+                files_created=[]
+            )
 
     # Parse rollback info (stored in settings_changes_json)
     try:
@@ -409,6 +438,153 @@ def _rollback_files(rollback_info: Dict[str, Any]) -> List[str]:
                 affected_files.append(str(path))
 
     return affected_files
+
+
+# =============================================================================
+# Capability Dependencies
+# =============================================================================
+
+def add_dependency(
+    capability_id: str,
+    depends_on_id: str,
+    dependency_type: str = "required",
+    notes: str = None
+) -> bool:
+    """
+    Add a dependency between two capabilities.
+
+    Args:
+        capability_id: The capability that has the dependency
+        depends_on_id: The capability that is depended upon
+        dependency_type: 'required', 'optional', or 'suggested'
+        notes: Optional notes about the dependency
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if dependency_type not in ('required', 'optional', 'suggested'):
+        return False
+
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO capability_dependencies
+                   (capability_id, depends_on_id, dependency_type, added_at, notes)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (capability_id, depends_on_id, dependency_type, get_timestamp(), notes)
+            )
+            conn.commit()
+            return True
+    except Exception:
+        return False
+
+
+def remove_dependency(capability_id: str, depends_on_id: str) -> bool:
+    """Remove a dependency between two capabilities."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM capability_dependencies WHERE capability_id = ? AND depends_on_id = ?",
+                (capability_id, depends_on_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except Exception:
+        return False
+
+
+def get_dependencies(capability_id: str) -> List[Dict[str, Any]]:
+    """
+    Get all capabilities that a capability depends on.
+
+    Returns list of dicts with: depends_on_id, depends_on_name, dependency_type, notes
+    """
+    # First get the capability by ID or name
+    cap = get_capability(capability_id)
+    if not cap:
+        return []
+
+    return db_execute(
+        """SELECT
+               cd.depends_on_id,
+               c.name as depends_on_name,
+               cd.dependency_type,
+               cd.notes
+           FROM capability_dependencies cd
+           JOIN capabilities c ON cd.depends_on_id = c.id
+           WHERE cd.capability_id = ?
+           AND c.status = 'active'""",
+        (cap['id'],)
+    )
+
+
+def get_dependents(capability_id: str) -> List[Dict[str, Any]]:
+    """
+    Get all capabilities that depend on this capability.
+
+    Returns list of dicts with: capability_id, capability_name, dependency_type
+    """
+    # First get the capability by ID or name
+    cap = get_capability(capability_id)
+    if not cap:
+        return []
+
+    return db_execute(
+        """SELECT
+               cd.capability_id,
+               c.name as capability_name,
+               cd.dependency_type
+           FROM capability_dependencies cd
+           JOIN capabilities c ON cd.capability_id = c.id
+           WHERE cd.depends_on_id = ?
+           AND c.status = 'active'""",
+        (cap['id'],)
+    )
+
+
+def check_rollback_safe(capability_id: str) -> Dict[str, Any]:
+    """
+    Check if a capability can be safely rolled back.
+
+    Returns dict with:
+        - safe: bool, True if safe to rollback
+        - dependents: list of capabilities that depend on this one
+        - message: explanation
+    """
+    dependents = get_dependents(capability_id)
+
+    if not dependents:
+        return {
+            'safe': True,
+            'dependents': [],
+            'message': 'No dependents found'
+        }
+
+    # Check for required dependencies
+    required_deps = [d for d in dependents if d['dependency_type'] == 'required']
+    optional_deps = [d for d in dependents if d['dependency_type'] in ('optional', 'suggested')]
+
+    if required_deps:
+        cap_names = [d['capability_name'] for d in required_deps]
+        return {
+            'safe': False,
+            'dependents': dependents,
+            'message': f"Cannot rollback: required by {', '.join(cap_names)}"
+        }
+
+    if optional_deps:
+        cap_names = [d['capability_name'] for d in optional_deps]
+        return {
+            'safe': True,
+            'dependents': dependents,
+            'message': f"Warning: optional/suggested dependency for {', '.join(cap_names)}"
+        }
+
+    return {
+        'safe': True,
+        'dependents': dependents,
+        'message': 'Safe to rollback'
+    }
 
 
 def format_proposal_review(proposal: Dict[str, Any]) -> str:

@@ -637,9 +637,10 @@ def cmd_reject(args):
 
 def cmd_rollback(args):
     """Rollback a capability."""
-    from installer import rollback_capability, get_capability
+    from installer import rollback_capability, get_capability, check_rollback_safe, get_dependents
 
     capability_name = args.capability_name
+    force = getattr(args, 'force', False)
 
     # Verify capability exists
     capability = get_capability(capability_name)
@@ -661,6 +662,26 @@ def cmd_rollback(args):
     print(f"  Installed: {capability['installed_at']}")
     print()
 
+    # Check for dependents
+    dependents = get_dependents(capability['id'])
+    if dependents:
+        print("  -- Dependencies --")
+        print(f"  The following capabilities depend on this one:")
+        for dep in dependents:
+            dep_type = dep['dependency_type']
+            print(f"    - {dep['capability_name']} ({dep_type})")
+        print()
+
+        required_deps = [d for d in dependents if d['dependency_type'] == 'required']
+        if required_deps:
+            print("  ERROR: Cannot rollback - has required dependents.")
+            print("  First rollback the dependent capabilities.")
+            return 1
+
+        if not force:
+            print("  Use --force to rollback anyway (will affect optional dependents).")
+            return 1
+
     # Confirm rollback
     confirm = input("Proceed with rollback? [y/N]: ").strip().lower()
     if confirm not in ('y', 'yes'):
@@ -668,7 +689,7 @@ def cmd_rollback(args):
         return 0
 
     # Rollback
-    result = rollback_capability(capability['id'])
+    result = rollback_capability(capability['id'], force=force)
 
     if result.success:
         print()
@@ -683,6 +704,133 @@ def cmd_rollback(args):
 
     print()
     return 0
+
+
+def cmd_dependencies(args):
+    """Show or manage capability dependencies."""
+    from installer import (
+        get_capability, get_dependencies, get_dependents,
+        add_dependency, remove_dependency
+    )
+
+    db_path = get_db_for_args(args)
+    action = getattr(args, 'action', 'show')
+    capability_name = getattr(args, 'capability', None)
+
+    if action == 'list':
+        # List all dependencies
+        deps = db_execute(
+            """SELECT cd.*, c1.name as cap_name, c2.name as dep_name
+               FROM capability_dependencies cd
+               JOIN capabilities c1 ON cd.capability_id = c1.id
+               JOIN capabilities c2 ON cd.depends_on_id = c2.id
+               WHERE c1.status = 'active' AND c2.status = 'active'
+               ORDER BY c1.name""",
+            db_path=db_path
+        )
+
+        print()
+        print("CAPABILITY DEPENDENCIES")
+        print("-" * 60)
+
+        if not deps:
+            print("\nNo dependencies defined.")
+            print()
+            return 0
+
+        current_cap = None
+        for d in deps:
+            if d['cap_name'] != current_cap:
+                current_cap = d['cap_name']
+                print(f"\n  {current_cap}:")
+            print(f"    -> {d['dep_name']} ({d['dependency_type']})")
+            if d.get('notes'):
+                print(f"       Note: {d['notes']}")
+
+        print()
+        return 0
+
+    if not capability_name:
+        print("Error: capability name required")
+        return 1
+
+    capability = get_capability(capability_name)
+    if not capability:
+        print(f"\nCapability not found: {capability_name}")
+        return 1
+
+    if action == 'show':
+        print()
+        print(f"DEPENDENCIES FOR: {capability['name']}")
+        print("-" * 60)
+
+        # Show what this capability depends on
+        deps = get_dependencies(capability['id'])
+        print("\n  Depends on:")
+        if deps:
+            for d in deps:
+                print(f"    - {d['depends_on_name']} ({d['dependency_type']})")
+                if d.get('notes'):
+                    print(f"      Note: {d['notes']}")
+        else:
+            print("    (none)")
+
+        # Show what depends on this capability
+        dependents = get_dependents(capability['id'])
+        print("\n  Depended on by:")
+        if dependents:
+            for d in dependents:
+                print(f"    - {d['capability_name']} ({d['dependency_type']})")
+        else:
+            print("    (none)")
+
+        print()
+        return 0
+
+    elif action == 'add':
+        depends_on = getattr(args, 'depends_on', None)
+        dep_type = getattr(args, 'type', 'required')
+        notes = getattr(args, 'notes', None)
+
+        if not depends_on:
+            print("Error: --depends-on required")
+            return 1
+
+        target = get_capability(depends_on)
+        if not target:
+            print(f"\nDependency target not found: {depends_on}")
+            return 1
+
+        if add_dependency(capability['id'], target['id'], dep_type, notes):
+            print(f"\nAdded dependency: {capability['name']} -> {target['name']} ({dep_type})")
+        else:
+            print("\nFailed to add dependency")
+            return 1
+
+        return 0
+
+    elif action == 'remove':
+        depends_on = getattr(args, 'depends_on', None)
+
+        if not depends_on:
+            print("Error: --depends-on required")
+            return 1
+
+        target = get_capability(depends_on)
+        if not target:
+            print(f"\nDependency target not found: {depends_on}")
+            return 1
+
+        if remove_dependency(capability['id'], target['id']):
+            print(f"\nRemoved dependency: {capability['name']} -> {target['name']}")
+        else:
+            print("\nDependency not found or failed to remove")
+            return 1
+
+        return 0
+
+    print(f"Unknown action: {action}")
+    return 1
 
 
 def cmd_dismiss_gap(args):
@@ -886,6 +1034,19 @@ def main():
     # rollback
     rollback_parser = subparsers.add_parser("rollback", help="Rollback a capability")
     rollback_parser.add_argument("capability_name", help="Capability name to rollback")
+    rollback_parser.add_argument("--force", action="store_true",
+                                  help="Force rollback even with optional dependents")
+
+    # dependencies
+    deps_parser = subparsers.add_parser("dependencies", help="Show or manage capability dependencies")
+    deps_parser.add_argument("action", nargs="?", default="list",
+                             choices=["list", "show", "add", "remove"],
+                             help="Action to perform (default: list)")
+    deps_parser.add_argument("capability", nargs="?", help="Capability name (for show/add/remove)")
+    deps_parser.add_argument("--depends-on", help="Target capability for dependency")
+    deps_parser.add_argument("--type", choices=["required", "optional", "suggested"],
+                             default="required", help="Dependency type (default: required)")
+    deps_parser.add_argument("--notes", help="Notes about the dependency")
 
     # dismiss-gap
     dismiss_parser = subparsers.add_parser("dismiss-gap", help="Permanently ignore a gap")
@@ -918,6 +1079,7 @@ def main():
         "approve": cmd_approve,
         "reject": cmd_reject,
         "rollback": cmd_rollback,
+        "dependencies": cmd_dependencies,
         "dismiss-gap": cmd_dismiss_gap,
         "meta-status": cmd_meta_status,
     }
