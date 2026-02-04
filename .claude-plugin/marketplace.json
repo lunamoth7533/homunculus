@@ -1,0 +1,15 @@
+{
+  "name": "homunculus",
+  "owner": {
+    "name": "lunamoth7533",
+    "email": ""
+  },
+  "plugins": [
+    {
+      "name": "homunculus",
+      "source": "./",
+      "description": "Self-evolution system for Claude Code - automatic gap detection and capability synthesis with human-in-the-loop approval",
+      "version": "1.0.0"
+    }
+  ]
+}
