@@ -71,6 +71,14 @@ handle_stop() {
 {"id": "obs-${random_part}", "timestamp": "${timestamp}", "session_id": "${session_id}", "event_type": "stop", "processed": 0}
 EOF
 
+    # End session in database
+    python3 -c "
+import sys
+sys.path.insert(0, '${HOMUNCULUS_ROOT}/scripts')
+from process_observation import end_session
+end_session('${session_id}', '${timestamp}')
+" 2>/dev/null || true
+
     # Clean up session file
     rm -f "$SESSION_FILE" 2>/dev/null || true
 }

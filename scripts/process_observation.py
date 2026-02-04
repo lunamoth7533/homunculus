@@ -16,14 +16,16 @@ import hashlib
 import time
 import re
 import logging
+import sqlite3
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-# Determine log directory
+# Determine paths
 HOMUNCULUS_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path.home() / "homunculus"))
 LOG_DIR = HOMUNCULUS_ROOT / "logs"
 LOG_FILE = LOG_DIR / "observations.log"
+DB_PATH = HOMUNCULUS_ROOT / "homunculus.db"
 
 # Patterns to redact from logged data
 SENSITIVE_PATTERNS = [
@@ -35,6 +37,78 @@ SENSITIVE_PATTERNS = [
     (r'xox[baprs]-[a-zA-Z0-9-]+', '[SLACK_TOKEN_REDACTED]'),
     (r'(?i)aws[_-]?secret[_-]?access[_-]?key["\']?\s*[:=]\s*["\']?[^\s"\']+', 'AWS_SECRET=[REDACTED]'),
 ]
+
+
+def ensure_session_exists(session_id: str, timestamp: str, project_path: Optional[str] = None) -> bool:
+    """
+    Ensure session exists in database, creating it if necessary.
+    Returns True if session was created (first observation), False if it already existed.
+    """
+    if not DB_PATH.exists():
+        return False
+
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        cursor = conn.cursor()
+
+        # Check if session exists
+        cursor.execute("SELECT id FROM sessions WHERE id = ?", (session_id,))
+        existing = cursor.fetchone()
+
+        if existing:
+            # Session exists, increment observation count
+            cursor.execute(
+                "UPDATE sessions SET observation_count = observation_count + 1 WHERE id = ?",
+                (session_id,)
+            )
+            conn.commit()
+            conn.close()
+            return False
+        else:
+            # Create new session
+            cursor.execute(
+                """INSERT INTO sessions (id, started_at, project_path, observation_count)
+                   VALUES (?, ?, ?, 1)""",
+                (session_id, timestamp, project_path)
+            )
+            conn.commit()
+            conn.close()
+            return True
+
+    except Exception as e:
+        # Log but don't crash
+        try:
+            logger = logging.getLogger("homunculus.observation")
+            logger.warning(f"Error tracking session: {e}")
+        except Exception:
+            pass
+        return False
+
+
+def end_session(session_id: str, timestamp: str) -> bool:
+    """Mark a session as ended in the database."""
+    if not DB_PATH.exists():
+        return False
+
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "UPDATE sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL",
+            (timestamp, session_id)
+        )
+        conn.commit()
+        conn.close()
+        return True
+
+    except Exception as e:
+        try:
+            logger = logging.getLogger("homunculus.observation")
+            logger.warning(f"Error ending session: {e}")
+        except Exception:
+            pass
+        return False
 
 
 def setup_logging() -> logging.Logger:
@@ -199,6 +273,11 @@ def main():
             event_type = 'pre_tool'
         elif event_type == 'post':
             event_type = 'post_tool'
+
+        # Track session in database (creates on first observation)
+        is_new_session = ensure_session_exists(session_id, timestamp, project_path)
+        if is_new_session:
+            logger.info(f"New session started: {session_id}")
 
         # Build observation
         obs = build_observation(event_type, timestamp, session_id, project_path, input_data)
