@@ -1,0 +1,11 @@
+# Homunculus Dependencies
+# Core requirements (standard library is sufficient for basic operation)
+
+# Required
+pyyaml>=6.0
+
+# Optional: For LLM-enhanced synthesis
+# anthropic>=0.18.0
+
+# Development
+# pytest>=7.0.0

@@ -244,6 +244,45 @@ def build_observation(
     return obs
 
 
+def persist_observation_to_db(obs: Dict[str, Any]) -> bool:
+    """
+    Persist observation to the database.
+    Uses INSERT OR IGNORE to handle duplicates gracefully.
+    """
+    if not DB_PATH.exists():
+        return False
+
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO observations (
+                id, timestamp, session_id, project_path, event_type,
+                tool_name, tool_success, tool_error, raw_json, processed, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        """, (
+            obs.get('id'),
+            obs.get('timestamp'),
+            obs.get('session_id'),
+            obs.get('project_path'),
+            obs.get('event_type'),
+            obs.get('tool_name'),
+            obs.get('tool_success'),
+            obs.get('tool_error'),
+            obs.get('raw_json'),
+            obs.get('timestamp')
+        ))
+
+        conn.commit()
+        conn.close()
+        return True
+
+    except Exception as e:
+        logger.warning(f"Error persisting observation to DB: {e}")
+        return False
+
+
 def main():
     """Main entry point with comprehensive error handling."""
     try:
@@ -282,7 +321,14 @@ def main():
         # Build observation
         obs = build_observation(event_type, timestamp, session_id, project_path, input_data)
 
-        # Output JSON to stdout (observe.sh will redirect to file)
+        # CRITICAL: Persist to database FIRST (primary storage)
+        db_persisted = persist_observation_to_db(obs)
+        if db_persisted:
+            logger.debug(f"Observation {obs['id']} persisted to DB")
+        else:
+            logger.warning(f"Observation {obs['id']} NOT persisted to DB (DB may not exist)")
+
+        # Output JSON to stdout (observe.sh will redirect to file as backup)
         print(json.dumps(obs))
 
         # Try to detect capability usage (non-blocking)

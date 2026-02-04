@@ -418,10 +418,13 @@ def cmd_detect(args):
     print()
     print("Running gap detection...")
 
+    # Get the appropriate database path
+    db_path = get_db_for_args(args)
+
     try:
         # Import detector module
         from detector import run_detection
-        gaps = run_detection()
+        gaps = run_detection(db_path=db_path)
 
         if gaps:
             print(f"\nDetected {len(gaps)} gap(s):")

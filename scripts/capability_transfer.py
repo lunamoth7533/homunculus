@@ -16,6 +16,7 @@ from utils import (
     HOMUNCULUS_ROOT, get_db_connection, db_execute, get_timestamp,
     generate_id
 )
+from installer import safe_path_join, validate_install_path
 
 EXPORT_VERSION = "1.0"
 
@@ -46,21 +47,25 @@ def export_capability(capability_name: str) -> Optional[Dict[str, Any]]:
 
     cap = caps[0]
 
-    # Parse files
+    # Parse files - use installed_files_json from capabilities table
     try:
-        files = json.loads(cap.get('files_json') or '[]')
+        files = json.loads(cap.get('installed_files_json') or cap.get('files_json') or '[]')
     except json.JSONDecodeError:
         files = []
 
-    # Read actual file contents from disk
+    # Read actual file contents from disk (with path validation)
     for f in files:
         rel_path = f.get('path', '')
-        full_path = HOMUNCULUS_ROOT / rel_path
-        if full_path.exists():
-            try:
+        if not rel_path:
+            continue
+        try:
+            # SECURITY: Use safe_path_join to prevent path traversal during export
+            full_path = safe_path_join(HOMUNCULUS_ROOT, rel_path)
+            if full_path.exists():
                 f['content'] = full_path.read_text()
-            except Exception:
-                pass
+        except (ValueError, Exception):
+            # Skip files with invalid paths or read errors
+            pass
 
     export_data = {
         "export_version": EXPORT_VERSION,
@@ -152,7 +157,7 @@ def import_capability(
             'message': f"Capability '{cap_info['name']}' already exists. Use --force to overwrite."
         }
 
-    # Write files
+    # Write files with security validation
     files_created = []
     try:
         for f in files:
@@ -162,7 +167,22 @@ def import_capability(
             if not rel_path or not content:
                 continue
 
-            full_path = HOMUNCULUS_ROOT / rel_path
+            # SECURITY: Validate that the path is within allowed directories
+            if not validate_install_path(rel_path):
+                return {
+                    'success': False,
+                    'message': f"Invalid install path: {rel_path}. Must be in evolved/"
+                }
+
+            # SECURITY: Use safe_path_join to prevent path traversal
+            try:
+                full_path = safe_path_join(HOMUNCULUS_ROOT, rel_path)
+            except ValueError as e:
+                return {
+                    'success': False,
+                    'message': f"Path security error: {e}"
+                }
+
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content)
             files_created.append(str(full_path))

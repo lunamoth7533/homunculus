@@ -1,353 +1,416 @@
 # Homunculus
 
-**Self-Evolution System for Claude Code**
+> **Self-evolving capabilities for Claude Code** — Automatically detects what Claude can't do and proposes solutions.
 
-Homunculus is a Claude Code plugin that enables automatic detection of capability gaps and self-synthesis of new abilities. It observes Claude's interactions, identifies patterns where capabilities are missing, and proposes new skills, hooks, agents, and commands to address those gaps.
+Homunculus observes your Claude Code sessions, identifies capability gaps (like "I can't read PDFs"), and generates new skills, hooks, and tools to fix them. All changes require your approval.
+
+---
+
+## Quick Start
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/yourusername/homunculus.git ~/homunculus
+
+# 2. Initialize
+cd ~/homunculus && python3 scripts/cli.py init
+
+# 3. Check status
+python3 scripts/cli.py status
+```
+
+Then in Claude Code:
+```
+/homunculus status      # View system status
+/homunculus proposals   # See pending proposals
+/homunculus approve <id> # Install a capability
+```
+
+---
 
 ## Features
 
-- **16 Gap Types**: Detects tool, knowledge, workflow, integration, context, permission, quality, speed, communication, recovery, reasoning, verification, discovery, learning, evolution, and self-awareness gaps
-- **5 Capability Types**: Generates skills, hooks, agents, commands, and MCP servers
-- **Human-in-the-Loop**: All proposed capabilities require human approval before installation
-- **Rollback Support**: Every installed capability can be rolled back
-- **Layer 2 Meta-Evolution**: The system monitors and improves its own detection and synthesis performance
-- **Project-Aware Scoping**: Capabilities can be scoped to session, project, or global
-- **Free to Run**: No external API calls required for core functionality
+| Feature | Description |
+|---------|-------------|
+| **Gap Detection** | Identifies 16 types of capability gaps (tool, knowledge, workflow, etc.) |
+| **Auto-Synthesis** | Generates skills, hooks, agents, commands, and MCP servers |
+| **Human Approval** | All changes require your explicit approval before installation |
+| **Safe Rollback** | Every installed capability can be instantly rolled back |
+| **Meta-Evolution** | The system improves its own detection over time (Layer 2) |
+| **Project Scoping** | Capabilities can be session, project, or global scoped |
+| **Zero API Costs** | No external API calls required for core functionality |
+
+---
+
+## Prerequisites
+
+- **Python 3.8+** with standard library
+- **Claude Code** CLI installed
+- **~50MB disk space** for database and logs
+
+---
 
 ## Installation
 
-### 1. Clone or Copy to Home Directory
+### Option A: As a Claude Code Plugin (Recommended)
 
 ```bash
-# The plugin should be at ~/homunculus
-cd ~
-git clone <repository-url> homunculus
-# OR if you already have it:
-# mv /path/to/homunculus ~/homunculus
-```
+# 1. Clone to home directory
+git clone https://github.com/yourusername/homunculus.git ~/homunculus
 
-### 2. Initialize the Database
-
-```bash
+# 2. Initialize the database
 cd ~/homunculus
 python3 scripts/cli.py init
+
+# 3. In Claude Code, add the plugin
+/plugin marketplace add ~/homunculus
+/plugin install homunculus@homunculus
+
+# 4. Restart Claude Code to activate hooks
 ```
 
-### 3. Install as a Plugin
+### Option B: Manual Setup
 
 ```bash
-# Add the plugin marketplace
-/plugin marketplace add ~/homunculus
+# 1. Clone and initialize
+git clone https://github.com/yourusername/homunculus.git ~/homunculus
+cd ~/homunculus
+python3 scripts/cli.py init
 
-# Install the plugin
-/plugin install homunculus@homunculus
+# 2. Add hooks manually to ~/.claude/settings.json
+# (See docs/hook-setup.md for details)
 ```
 
-The plugin automatically configures hooks for PreToolUse, PostToolUse, and Stop events.
-
-### 4. Restart Claude Code
-
-Restart Claude Code to activate the hooks.
-
-## Usage
-
-### Check System Status
+### Verify Installation
 
 ```bash
 python3 ~/homunculus/scripts/cli.py status
 ```
 
-### View Detected Gaps
+You should see:
+```
+============================================================
+  HOMUNCULUS STATUS
+============================================================
+  Observations: 0
+  Gaps detected: 0
+  Proposals: 0
+  Installed capabilities: 0
+============================================================
+```
+
+---
+
+## Usage
+
+### In Claude Code (Recommended)
+
+Use the `/homunculus` command directly in your Claude Code sessions:
+
+| Command | Description |
+|---------|-------------|
+| `/homunculus` | Show system status |
+| `/homunculus gaps` | List detected capability gaps |
+| `/homunculus proposals` | List pending proposals |
+| `/homunculus review <id>` | Preview a proposal |
+| `/homunculus approve <id>` | Install a proposal |
+| `/homunculus reject <id>` | Reject a proposal |
+| `/homunculus capabilities` | List installed capabilities |
+| `/homunculus rollback <name>` | Remove an installed capability |
+
+### From Terminal
+
+You can also run commands directly:
 
 ```bash
-# List all pending gaps
+# Status and monitoring
+python3 ~/homunculus/scripts/cli.py status
 python3 ~/homunculus/scripts/cli.py gaps
-
-# View details for a specific gap
-python3 ~/homunculus/scripts/cli.py gap <gap-id>
-```
-
-### Run Gap Detection Manually
-
-```bash
-python3 ~/homunculus/scripts/cli.py detect
-```
-
-### Generate Capability Proposals
-
-```bash
-# Synthesize proposals for pending gaps
-python3 ~/homunculus/scripts/cli.py synthesize
-
-# Synthesize for a specific gap
-python3 ~/homunculus/scripts/cli.py synthesize <gap-id>
-```
-
-### Review and Approve Proposals
-
-```bash
-# List pending proposals
 python3 ~/homunculus/scripts/cli.py proposals
 
-# Review a specific proposal (shows full details and file previews)
-python3 ~/homunculus/scripts/cli.py review <proposal-id>
+# Manual triggers
+python3 ~/homunculus/scripts/cli.py detect      # Run gap detection
+python3 ~/homunculus/scripts/cli.py synthesize  # Generate proposals
 
-# Approve and install a proposal
-python3 ~/homunculus/scripts/cli.py approve <proposal-id>
+# Manage proposals
+python3 ~/homunculus/scripts/cli.py review <id>
+python3 ~/homunculus/scripts/cli.py approve <id>
+python3 ~/homunculus/scripts/cli.py reject <id> --reason "Not needed"
 
-# Reject a proposal
-python3 ~/homunculus/scripts/cli.py reject <proposal-id> --reason "Not needed"
-```
-
-### Manage Installed Capabilities
-
-```bash
-# List installed capabilities
+# Manage capabilities
 python3 ~/homunculus/scripts/cli.py capabilities
+python3 ~/homunculus/scripts/cli.py rollback <name>
 
-# Rollback an installed capability
-python3 ~/homunculus/scripts/cli.py rollback <capability-name>
+# Advanced
+python3 ~/homunculus/scripts/cli.py meta-status    # Layer 2 status
+python3 ~/homunculus/scripts/cli.py config         # View config
+python3 ~/homunculus/scripts/cli.py dismiss-gap <id>  # Ignore a gap
 ```
 
-### Meta-Evolution (Layer 2)
-
-```bash
-# Check meta-evolution status
-python3 ~/homunculus/scripts/cli.py meta-status
-
-# Run meta-analysis to identify system improvements
-python3 ~/homunculus/scripts/cli.py meta-status --analyze
-```
-
-### Other Commands
-
-```bash
-# View configuration
-python3 ~/homunculus/scripts/cli.py config
-
-# Dismiss a gap permanently
-python3 ~/homunculus/scripts/cli.py dismiss-gap <gap-id> --reason "Not relevant"
-
-# Re-initialize (use with caution)
-python3 ~/homunculus/scripts/cli.py init --force
-```
+---
 
 ## How It Works
 
-### 1. Observation
+```
+You use Claude Code normally
+         │
+         ▼
+┌─────────────────────────────────────┐
+│  1. OBSERVE                         │
+│  Hooks capture tool usage,          │
+│  errors, and "I can't..." moments   │
+└─────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│  2. DETECT                          │
+│  16 rules analyze patterns to       │
+│  identify capability gaps           │
+└─────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│  3. SYNTHESIZE                      │
+│  Generate proposals for new         │
+│  skills, hooks, agents, etc.        │
+└─────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│  4. REVIEW (You)                    │
+│  Approve, reject, or edit           │
+│  each proposal                      │
+└─────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│  5. INSTALL                         │
+│  Approved capabilities are          │
+│  installed (with rollback option)   │
+└─────────────────────────────────────┘
+```
 
-Claude Code hooks capture tool usage events and store them in `~/homunculus/observations/current.jsonl`. Events include:
-- Tool name and input
-- Success/failure status
-- Error messages
-- Timing information
+### What Gets Generated
 
-### 2. Gap Detection
+| Type | Description | Example |
+|------|-------------|---------|
+| **Skill** | Instructions for Claude | "How to handle PDF files" |
+| **Hook** | Automated triggers | "Run tests before commits" |
+| **Agent** | Specialized subagent | "Database optimization expert" |
+| **Command** | Slash command | `/format-sql` |
+| **MCP Server** | External integration | Slack, Jira, custom APIs |
 
-The detection engine analyzes observations using 16 detector rules defined in `~/homunculus/meta/detector-rules/`. Each rule looks for patterns like:
-- Explicit statements: "I can't...", "I don't have access to..."
-- Tool failures with specific error patterns
-- Repeated clarification requests
-- Permission denials
+---
 
-### 3. Synthesis
-
-When gaps are detected, the synthesis engine uses templates from `~/homunculus/meta/synthesis-templates/` to generate capability proposals. Templates exist for:
-- **Skills**: Markdown instructions for Claude
-- **Hooks**: Claude Code hooks for automation
-- **Agents**: Specialized subagents for complex tasks
-- **Commands**: User-invokable slash commands
-- **MCP Servers**: Model Context Protocol servers
-
-### 4. Human Review
-
-All proposals require human approval. The review process shows:
-- Full proposal details
-- Generated file contents
-- Reasoning for the proposal
-- Approval/rejection options
-
-### 5. Installation & Rollback
-
-Approved proposals are installed to `~/homunculus/evolved/`. Every installation:
-- Creates backup of any existing files
-- Tracks rollback information
-- Can be reversed with the `rollback` command
-
-### 6. Meta-Evolution (Layer 2)
-
-The system monitors its own performance:
-- Tracks detector approval/rejection rates
-- Identifies patterns in rejected proposals
-- Proposes improvements to detection rules and templates
-
-## Directory Structure
+## Project Structure
 
 ```
 ~/homunculus/
-├── config.yaml              # System configuration
-├── homunculus.db            # SQLite database
-├── observations/
-│   └── current.jsonl        # Current session observations
-├── evolved/                  # Installed capabilities
+├── config.yaml          # Configuration (edit this!)
+├── homunculus.db        # SQLite database
+├── observations/        # Captured session data
+├── evolved/             # YOUR installed capabilities
 │   ├── skills/
 │   ├── hooks/
 │   ├── agents/
 │   ├── commands/
 │   └── mcp-servers/
 ├── meta/
-│   ├── detector-rules/      # 16 gap detection rules
-│   └── synthesis-templates/ # 5 capability templates
-├── scripts/
-│   ├── cli.py               # Main CLI
-│   ├── utils.py             # Shared utilities
-│   ├── detector.py          # Gap detection engine
-│   ├── synthesizer.py       # Capability synthesis
-│   ├── installer.py         # Install/rollback engine
-│   ├── meta_evolution.py    # Layer 2 system
-│   ├── gap_types.py         # Gap type definitions
-│   ├── init_db.py           # Database initialization
-│   ├── observe.sh           # Hook observation script
-│   └── schema.sql           # Database schema
-└── tests/                   # Test suite (107 tests)
+│   ├── detector-rules/  # Customize gap detection
+│   └── synthesis-templates/
+├── scripts/             # Core engine (don't edit)
+└── tests/               # 107 tests
 ```
+
+**Key files:**
+- `config.yaml` — Adjust thresholds, enable/disable features
+- `meta/detector-rules/*.yaml` — Customize what gaps to detect
+- `evolved/*` — Your generated capabilities live here
+
+---
 
 ## Configuration
 
-Edit `~/homunculus/config.yaml` to customize:
+Edit `~/homunculus/config.yaml`:
 
 ```yaml
-version: "1.0.0"
-
 detection:
-  min_confidence_threshold: 0.3    # Minimum confidence to detect a gap
-  auto_synthesize_threshold: 0.7   # Auto-synthesize above this confidence
+  min_confidence_threshold: 0.3    # Lower = more sensitive (0.0-1.0)
+  auto_synthesize_threshold: 0.7   # Auto-generate proposals above this
   triggers:
     on_failure: true               # Detect on tool failures
     on_friction: true              # Detect on repeated clarifications
     on_session_end: true           # Analyze at session end
-    periodic_minutes: 30           # Periodic analysis interval
 
 synthesis:
-  synthesis_model: sonnet          # Model for complex synthesis
-  detection_model: haiku           # Model for detection (faster)
-  max_proposals_per_day: 10        # Rate limiting
+  max_proposals_per_day: 10        # Avoid proposal overload
 
 meta_evolution:
-  enabled: true                    # Enable Layer 2
-  analysis_frequency: weekly       # How often to analyze
-  max_meta_proposals_per_week: 3   # Rate limit meta-proposals
-
-scoping:
-  default_scope: global            # Default capability scope
-  project_detection: auto          # Auto-detect project context
+  enabled: true                    # Layer 2 self-improvement
 
 storage:
-  observations_max_mb: 50          # Max observation storage
-  archive_after_days: 7            # Archive old observations
+  archive_after_days: 7            # Keep observations for 7 days
 ```
+
+**Common tweaks:**
+- Raise `min_confidence_threshold` to `0.5` if getting too many gaps
+- Set `max_proposals_per_day: 5` to reduce noise
+- Disable `meta_evolution` if you want a simpler system
+
+---
 
 ## Gap Types
 
-| Type | Description | Default Scope |
-|------|-------------|---------------|
-| tool | Missing tool or capability | global |
-| knowledge | Missing domain knowledge | project |
-| workflow | Inefficient multi-step process | project |
-| integration | Can't connect to external service | global |
-| context | Missing project/codebase context | project |
-| permission | Blocked by permissions | global |
-| quality | Output quality issues | global |
-| speed | Performance too slow | project |
-| communication | Misunderstanding user intent | session |
-| recovery | Can't recover from errors | global |
-| reasoning | Complex reasoning failures | global |
-| verification | Can't verify correctness | project |
-| discovery | Can't find information | project |
-| learning | Repeating same mistakes | session |
-| evolution | Can't improve own behavior | global |
-| self_awareness | Unaware of own limitations | global |
+Homunculus detects **16 types** of capability gaps:
+
+**Core Gaps**
+- `tool` — Missing tool or integration (e.g., "can't read PDFs")
+- `knowledge` — Missing domain expertise (e.g., "unfamiliar with this API")
+- `workflow` — Inefficient repetitive process
+
+**Integration Gaps**
+- `integration` — Can't connect to external services
+- `context` — Lost project/session context
+- `permission` — Blocked by access controls
+
+**Quality Gaps**
+- `quality` — Repeated mistakes or poor output
+- `speed` — Tasks taking too long
+- `recovery` — Can't recover from errors
+
+**Communication Gaps**
+- `communication` — Misunderstanding user intent
+- `reasoning` — Complex logic failures
+- `verification` — Can't validate correctness
+
+**Meta Gaps**
+- `discovery` — Didn't know capability existed
+- `learning` — Not retaining patterns
+- `evolution` — System needs improvement
+- `self_awareness` — Unknown limitations
 
 ## Running Tests
 
 ```bash
-cd ~/homunculus
+cd ~/homunculus && python3 -m pytest tests/ -v
+# OR
 python3 -m unittest discover tests/ -v
 ```
 
-All 107 tests should pass.
+---
 
 ## Troubleshooting
 
 ### Hooks not triggering
-- Verify `~/.claude/settings.json` is correctly configured
-- Restart Claude Code after changing settings
-- Check that `observe.sh` is executable: `chmod +x ~/homunculus/scripts/observe.sh`
+
+```bash
+# Check observe.sh is executable
+chmod +x ~/homunculus/scripts/observe.sh
+
+# Verify observations are being captured
+cat ~/homunculus/observations/current.jsonl
+
+# Restart Claude Code after any hook changes
+```
 
 ### Database errors
-- Re-initialize: `python3 scripts/cli.py init --force`
-- Check permissions on `~/homunculus/data/`
+
+```bash
+# Re-initialize (preserves observations)
+python3 ~/homunculus/scripts/cli.py init --force
+```
 
 ### No gaps detected
-- Ensure observations are being captured in `~/homunculus/observations/current.jsonl`
-- Run detection manually: `python3 scripts/cli.py detect`
+
+```bash
+# Check observations exist
+cat ~/homunculus/observations/current.jsonl
+
+# Run detection manually
+python3 ~/homunculus/scripts/cli.py detect
+```
 
 ### Proposals not generating
-- Check that synthesis templates exist in `~/homunculus/meta/synthesis-templates/`
-- Run synthesis manually: `python3 scripts/cli.py synthesize`
+
+```bash
+# Check for pending gaps first
+python3 ~/homunculus/scripts/cli.py gaps
+
+# Run synthesis manually
+python3 ~/homunculus/scripts/cli.py synthesize
+```
+
+---
+
+## FAQ
+
+**Q: Does this cost money?**
+A: No. Core functionality uses no external APIs. Optional LLM-enhanced synthesis can use Claude API if configured.
+
+**Q: Is it safe?**
+A: Yes. Nothing is installed without your explicit approval. Every change can be rolled back.
+
+**Q: Will it slow down Claude Code?**
+A: Minimal impact. Hooks are lightweight and run asynchronously.
+
+**Q: Can I customize detection rules?**
+A: Yes. Edit YAML files in `meta/detector-rules/` to adjust sensitivity or add new patterns.
+
+**Q: What if a generated capability is bad?**
+A: Reject it during review, or use `rollback <name>` after installation.
 
 ## Contributing
 
-Homunculus is designed to be extensible:
+**Add custom detector rules:**
+```bash
+# Create a new YAML file in meta/detector-rules/
+cp meta/detector-rules/tool-gap.yaml meta/detector-rules/my-custom-gap.yaml
+# Edit to define your detection patterns
+```
 
-1. **Add new detector rules**: Create YAML files in `meta/detector-rules/`
-2. **Add new synthesis templates**: Create YAML files in `meta/synthesis-templates/`
-3. **Extend gap types**: Modify `scripts/gap_types.py`
+**Add synthesis templates:**
+```bash
+# Create templates in meta/synthesis-templates/
+```
+
+See existing files for format examples.
+
+---
 
 ## License
 
-MIT License - See LICENSE file for details.
+MIT License — See [LICENSE](LICENSE) file.
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Claude Code                               │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
-│  │ PreToolUse  │    │ PostToolUse │    │    Stop     │         │
-│  │   Hook ✓    │    │   Hook ✓    │    │   Hook ✓    │         │
-│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘         │
-└─────────┼──────────────────┼──────────────────┼─────────────────┘
-          │                  │                  │
-          ▼                  ▼                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     HOMUNCULUS (Layer 1)                        │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
-│  │  Observer   │───▶│  Detector   │───▶│ Synthesizer │         │
-│  │             │    │ (16 rules)  │    │(5 templates)│         │
-│  └─────────────┘    └─────────────┘    └──────┬──────┘         │
-│                                               │                 │
-│                     ┌─────────────┐    ┌──────▼──────┐         │
-│                     │  Installer  │◀───│  Proposals  │         │
-│                     │  +Rollback  │    │   (Human    │         │
-│                     └──────┬──────┘    │   Review)   │         │
-│                            │           └─────────────┘         │
-│                            ▼                                    │
-│                     ┌─────────────┐                             │
-│                     │  Evolved    │                             │
-│                     │Capabilities │                             │
-│                     └─────────────┘                             │
-└─────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   META-EVOLUTION (Layer 2)                      │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
-│  │    Meta     │───▶│    Meta     │───▶│    Meta     │         │
-│  │  Observer   │    │  Analyzer   │    │  Proposals  │         │
-│  └─────────────┘    └─────────────┘    └─────────────┘         │
-│         │                                      │                │
-│         └──────────────────────────────────────┘                │
-│              Improves detectors & templates                     │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                      Claude Code                           │
+│   PreToolUse ─────┬───── PostToolUse ─────┬───── Stop     │
+└───────────────────┼───────────────────────┼────────────────┘
+                    │                       │
+                    ▼                       ▼
+┌────────────────────────────────────────────────────────────┐
+│                    LAYER 1: Evolution                      │
+│                                                            │
+│   Observe ──▶ Detect ──▶ Synthesize ──▶ Review ──▶ Install │
+│                                           │                │
+│                                      (You approve)         │
+└────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌────────────────────────────────────────────────────────────┐
+│                 LAYER 2: Meta-Evolution                    │
+│                                                            │
+│   Monitors Layer 1 performance and proposes improvements   │
+│   to detection rules and synthesis templates               │
+└────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+<p align="center">
+  <i>Built for Claude Code — Let your AI assistant evolve.</i>
+</p>

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import (
     HOMUNCULUS_ROOT, generate_id, get_timestamp, db_execute,
-    read_jsonl, load_yaml_file, get_db_connection
+    read_jsonl, load_yaml_file, get_db_connection, get_config_value
 )
 from gap_types import get_gap_info, get_default_scope, get_all_gap_types
 
@@ -69,6 +69,8 @@ class GapDetector:
     def __init__(self):
         self.rules: Dict[str, DetectorRule] = {}
         self.rules_dir = HOMUNCULUS_ROOT / "meta" / "detector-rules"
+        # Load config-enforced thresholds
+        self.min_confidence_threshold = get_config_value('detection.min_confidence_threshold', 0.3)
         self._load_rules()
 
     def _load_rules(self):
@@ -116,7 +118,9 @@ class GapDetector:
                 # Calculate confidence based on number of matches
                 base_confidence = min(0.3 + (len(matching_obs) * confidence_boost), 0.95)
 
-                if base_confidence >= rule.min_confidence:
+                # Enforce config threshold (use max of rule threshold and global threshold)
+                effective_threshold = max(rule.min_confidence, self.min_confidence_threshold)
+                if base_confidence >= effective_threshold:
                     # Extract desired capability
                     extract_rules = trigger.get('extract', {})
                     desired_cap = self._extract_capability(extract_rules, matching_obs)
@@ -467,7 +471,62 @@ class GapDetector:
             return False
 
 
-def run_detection(limit: int = 100) -> List[DetectedGap]:
+def get_unprocessed_observations_from_db(limit: int = 100, db_path: Path = None) -> List[Dict]:
+    """
+    Get unprocessed observations from the database.
+    Primary source for detection - falls back to JSONL if DB is empty.
+    """
+    if db_path is None:
+        from utils import DB_PATH
+        db_path = DB_PATH
+
+    if not db_path.exists():
+        return []
+
+    try:
+        observations = db_execute(
+            """SELECT id, timestamp, session_id, project_path, event_type,
+                      tool_name, tool_success, tool_error, raw_json
+               FROM observations
+               WHERE processed = 0
+               ORDER BY timestamp DESC
+               LIMIT ?""",
+            (limit,),
+            db_path=db_path
+        )
+        return [dict(obs) for obs in observations]
+    except Exception as e:
+        print(f"Error reading observations from DB: {e}")
+        return []
+
+
+def mark_observations_processed(observation_ids: List[str], db_path: Path = None) -> bool:
+    """Mark observations as processed in the database."""
+    if not observation_ids:
+        return True
+
+    if db_path is None:
+        from utils import DB_PATH
+        db_path = DB_PATH
+
+    if not db_path.exists():
+        return False
+
+    try:
+        with get_db_connection(db_path) as conn:
+            placeholders = ','.join(['?' for _ in observation_ids])
+            conn.execute(
+                f"UPDATE observations SET processed = 1 WHERE id IN ({placeholders})",
+                observation_ids
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error marking observations as processed: {e}")
+        return False
+
+
+def run_detection(limit: int = 100, db_path: Path = None) -> List[DetectedGap]:
     """Run gap detection on recent observations."""
     detector = GapDetector()
 
@@ -475,27 +534,31 @@ def run_detection(limit: int = 100) -> List[DetectedGap]:
         print("No detector rules loaded. Add rules to ~/homunculus/meta/detector-rules/")
         return []
 
-    # Load observations from current session
-    obs_file = HOMUNCULUS_ROOT / "observations" / "current.jsonl"
-    observations = read_jsonl(obs_file)
+    # PRIMARY: Load unprocessed observations from database
+    observations = get_unprocessed_observations_from_db(limit, db_path)
+
+    # FALLBACK: If DB has no observations, try JSONL file (legacy/backup)
+    if not observations:
+        obs_file = HOMUNCULUS_ROOT / "observations" / "current.jsonl"
+        observations = read_jsonl(obs_file)
+        observations = [o for o in observations if not o.get('processed')][:limit]
 
     if not observations:
         return []
 
-    # Get unprocessed observations
-    unprocessed = [o for o in observations if not o.get('processed')][:limit]
-
-    if not unprocessed:
-        return []
-
     # Detect gaps
-    gaps = detector.detect_from_observations(unprocessed)
+    gaps = detector.detect_from_observations(observations)
 
     # Save gaps
     saved_gaps = []
     for gap in gaps:
         if detector.save_gap(gap):
             saved_gaps.append(gap)
+
+    # Mark observations as processed in DB
+    obs_ids = [obs.get('id') for obs in observations if obs.get('id')]
+    if obs_ids:
+        mark_observations_processed(obs_ids, db_path)
 
     return saved_gaps
 

@@ -24,6 +24,81 @@ PROJECT_DB_DIR = ".homunculus"
 PROJECT_DB_NAME = "homunculus.db"
 
 
+def get_project_db_path(project_path: str) -> Path:
+    """
+    Get the database path for a project-scoped database.
+
+    Args:
+        project_path: Path to the project root
+
+    Returns:
+        Path to the project's homunculus database
+    """
+    return Path(project_path) / PROJECT_DB_DIR / PROJECT_DB_NAME
+
+
+def resolve_db_path(project_path: Optional[str] = None, scope: str = "global") -> Path:
+    """
+    Resolve the appropriate database path based on scope and project.
+
+    Args:
+        project_path: Path to a project (optional)
+        scope: "global", "project", or "auto"
+
+    Returns:
+        Path to the appropriate database
+    """
+    if scope == "global" or not project_path:
+        return DB_PATH
+
+    if scope == "project":
+        return get_project_db_path(project_path)
+
+    # Auto mode: use project DB if it exists, otherwise global
+    project_db = get_project_db_path(project_path)
+    if project_db.exists():
+        return project_db
+
+    return DB_PATH
+
+
+def ensure_project_db_initialized(project_path: str) -> bool:
+    """
+    Ensure the project database is initialized.
+
+    Args:
+        project_path: Path to the project root
+
+    Returns:
+        True if database was initialized or already exists
+    """
+    project_db_path = get_project_db_path(project_path)
+    project_db_dir = project_db_path.parent
+
+    if project_db_path.exists():
+        return True
+
+    # Create directory and initialize
+    try:
+        project_db_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy schema from main installation
+        schema_path = HOMUNCULUS_ROOT / "scripts" / "schema.sql"
+        if not schema_path.exists():
+            return False
+
+        import sqlite3
+        schema_sql = schema_path.read_text()
+        conn = sqlite3.connect(project_db_path)
+        conn.executescript(schema_sql)
+        conn.commit()
+        conn.close()
+        return True
+
+    except Exception:
+        return False
+
+
 def generate_id(prefix: str = "id") -> str:
     """Generate a unique ID with prefix."""
     unique = hashlib.sha256(f"{datetime.now(timezone.utc).isoformat()}{uuid.uuid4()}".encode()).hexdigest()[:12]
@@ -48,6 +123,24 @@ def load_config() -> Dict[str, Any]:
         return {}
     except Exception:
         return {}
+
+
+def get_config_value(key_path: str, default: Any = None) -> Any:
+    """
+    Get a config value by dot-notation path with default.
+    Example: get_config_value('detection.min_confidence_threshold', 0.3)
+    """
+    config = load_config()
+    keys = key_path.split('.')
+    value = config
+    for key in keys:
+        if isinstance(value, dict):
+            value = value.get(key)
+        else:
+            return default
+        if value is None:
+            return default
+    return value if value is not None else default
 
 
 @contextmanager

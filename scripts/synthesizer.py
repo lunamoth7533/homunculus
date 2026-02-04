@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import (
     HOMUNCULUS_ROOT, generate_id, get_timestamp, db_execute,
-    load_yaml_file, get_db_connection, load_config
+    load_yaml_file, get_db_connection, load_config, get_config_value
 )
 from gap_types import get_gap_info, get_capability_types
 
@@ -174,10 +174,10 @@ class Proposal:
     reasoning: str
     template_id: str
     template_version: int
-    template_variant: Optional[str]  # For A/B testing
     files: List[Dict[str, str]]
     rollback_instructions: str
     project_path: Optional[str] = None
+    template_variant: Optional[str] = None  # For A/B testing
 
 
 class CapabilitySynthesizer:
@@ -803,6 +803,19 @@ Add to `~/.claude/settings.json`:
             return False
 
 
+def get_today_proposal_count() -> int:
+    """Get the number of proposals created today."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        result = db_execute(
+            "SELECT COUNT(*) as count FROM proposals WHERE created_at LIKE ?",
+            (f"{today}%",)
+        )
+        return result[0]['count'] if result else 0
+    except Exception:
+        return 0
+
+
 def run_synthesis(gap_id: Optional[str] = None, limit: int = 5) -> List[Proposal]:
     """Run synthesis on pending gaps."""
     synthesizer = CapabilitySynthesizer()
@@ -810,6 +823,18 @@ def run_synthesis(gap_id: Optional[str] = None, limit: int = 5) -> List[Proposal
     if not synthesizer.templates:
         print("No synthesis templates loaded.")
         return []
+
+    # Enforce max_proposals_per_day from config
+    max_per_day = get_config_value('synthesis.max_proposals_per_day', 10)
+    today_count = get_today_proposal_count()
+    remaining_budget = max(0, max_per_day - today_count)
+
+    if remaining_budget == 0:
+        print(f"Daily proposal limit reached ({max_per_day}). Try again tomorrow.")
+        return []
+
+    # Adjust limit to not exceed daily budget
+    effective_limit = min(limit, remaining_budget)
 
     # Get pending gaps
     if gap_id:
@@ -823,7 +848,7 @@ def run_synthesis(gap_id: Optional[str] = None, limit: int = 5) -> List[Proposal
                WHERE status = 'pending'
                ORDER BY confidence DESC
                LIMIT ?""",
-            (limit,)
+            (effective_limit,)
         )
 
     if not gaps:
@@ -831,6 +856,11 @@ def run_synthesis(gap_id: Optional[str] = None, limit: int = 5) -> List[Proposal
 
     proposals = []
     for gap in gaps:
+        # Re-check budget before each proposal
+        if len(proposals) >= remaining_budget:
+            print(f"Daily proposal limit reached ({max_per_day}).")
+            break
+
         proposal = synthesizer.synthesize_from_gap(gap)
         if proposal and synthesizer.save_proposal(proposal):
             proposals.append(proposal)

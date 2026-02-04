@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/observe.sh pre_tool \"$CLAUDE_TOOL_NAME\" \"$CLAUDE_TOOL_INPUT\""
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/observe.sh pre_tool"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/observe.sh post_tool \"$CLAUDE_TOOL_NAME\" \"$CLAUDE_TOOL_INPUT\""
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/observe.sh post_tool"
           }
         ]
       }
