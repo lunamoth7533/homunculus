@@ -229,8 +229,8 @@ class TestInstallWorkflow(TestCase):
                 ) VALUES (?, ?, 'tool', 'test', 0.8, 'global', 'Test capability', 'test-detector', 'pending')
             """, (self.test_gap_id, timestamp))
 
-            # Create test proposal
-            files = [{"path": "evolved/test-workflow/test-skill.md", "content": "# Test", "action": "create"}]
+            # Create test proposal (must use allowed path in evolved/skills/)
+            files = [{"path": "evolved/skills/test-workflow-skill.md", "content": "# Test", "action": "create"}]
             conn.execute("""
                 INSERT INTO proposals (
                     id, created_at, gap_id, capability_type, capability_name,
@@ -249,10 +249,10 @@ class TestInstallWorkflow(TestCase):
             if Path(f).exists():
                 Path(f).unlink()
 
-        # Clean up test directories
-        test_dir = HOMUNCULUS_ROOT / "evolved" / "test-workflow"
-        if test_dir.exists():
-            shutil.rmtree(test_dir, ignore_errors=True)
+        # Clean up test files
+        test_file = HOMUNCULUS_ROOT / "evolved" / "skills" / "test-workflow-skill.md"
+        if test_file.exists():
+            test_file.unlink()
 
         # Clean up database entries
         with get_db_connection() as conn:

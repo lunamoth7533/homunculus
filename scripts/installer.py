@@ -5,6 +5,9 @@ Handles installing, tracking, and rolling back capabilities.
 """
 
 import json
+import os
+import re
+import stat
 import shutil
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -17,6 +20,77 @@ from utils import (
     HOMUNCULUS_ROOT, generate_id, get_timestamp,
     get_db_connection, db_execute
 )
+
+
+# Allowed directories for file installation (relative to HOMUNCULUS_ROOT)
+ALLOWED_INSTALL_DIRS = frozenset([
+    'evolved/skills',
+    'evolved/hooks',
+    'evolved/agents',
+    'evolved/commands',
+    'evolved/mcp-servers',
+])
+
+# Suspicious content patterns that should be flagged
+DANGEROUS_PATTERNS = [
+    (r'eval\s*\([^)]*\)', 'eval() call'),
+    (r'exec\s*\([^)]*\)', 'exec() call'),
+    (r'os\.system\s*\([^)]*\)', 'os.system() call'),
+    (r'subprocess\.(call|run|Popen)\s*\([^)]*shell\s*=\s*True', 'shell=True subprocess'),
+    (r'__import__\s*\([^)]*\)', '__import__() call'),
+    (r'curl[^|]*\|\s*(ba)?sh', 'curl pipe to shell'),
+    (r'wget[^|]*\|\s*(ba)?sh', 'wget pipe to shell'),
+    (r'rm\s+-rf\s+[/~]', 'dangerous rm -rf'),
+]
+
+
+def safe_path_join(base_path: Path, rel_path: str) -> Path:
+    """
+    Safely join paths, preventing path traversal attacks.
+
+    Raises ValueError if the resulting path would escape base_path.
+    """
+    # Normalize and resolve the path
+    # First, reject obviously malicious patterns
+    if '..' in rel_path or rel_path.startswith('/') or rel_path.startswith('~'):
+        raise ValueError(f"Invalid path (traversal attempt): {rel_path}")
+
+    # Resolve the full path
+    full_path = (base_path / rel_path).resolve()
+    base_resolved = base_path.resolve()
+
+    # Ensure it's within the base directory
+    try:
+        full_path.relative_to(base_resolved)
+    except ValueError:
+        raise ValueError(f"Path traversal detected: {rel_path} resolves outside {base_path}")
+
+    return full_path
+
+
+def validate_install_path(rel_path: str) -> bool:
+    """
+    Validate that the installation path is within allowed directories.
+    """
+    # Check if path starts with an allowed directory
+    for allowed_dir in ALLOWED_INSTALL_DIRS:
+        if rel_path.startswith(allowed_dir + '/') or rel_path.startswith(allowed_dir + '\\'):
+            return True
+    return False
+
+
+def validate_content(content: str, file_path: str) -> List[str]:
+    """
+    Validate content for suspicious patterns.
+    Returns list of warnings (empty if content is safe).
+    """
+    warnings = []
+
+    for pattern, description in DANGEROUS_PATTERNS:
+        if re.search(pattern, content, re.IGNORECASE | re.MULTILINE):
+            warnings.append(f"Suspicious pattern detected: {description}")
+
+    return warnings
 
 
 @dataclass
@@ -84,6 +158,7 @@ def install_proposal(proposal_id: str) -> InstallationResult:
     # Install files
     created_files = []
     rollback_info = {"files": [], "backups": []}
+    content_warnings = []
 
     try:
         for file_info in files:
@@ -91,8 +166,18 @@ def install_proposal(proposal_id: str) -> InstallationResult:
             rel_path = file_info['path']
             content = file_info.get('content', '')
 
-            # Resolve path relative to HOMUNCULUS_ROOT
-            full_path = HOMUNCULUS_ROOT / rel_path
+            # SECURITY: Validate path is in allowed directory
+            if not validate_install_path(rel_path):
+                raise ValueError(f"Installation path not allowed: {rel_path}. Must be in evolved/")
+
+            # SECURITY: Prevent path traversal
+            full_path = safe_path_join(HOMUNCULUS_ROOT, rel_path)
+
+            # SECURITY: Validate content for suspicious patterns
+            warnings = validate_content(content, rel_path)
+            if warnings:
+                content_warnings.extend(warnings)
+                # Log warnings but don't block (user has already approved)
 
             # Create parent directory if needed
             full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,8 +192,9 @@ def install_proposal(proposal_id: str) -> InstallationResult:
                         'backup': str(backup_path)
                     })
 
-                # Write the file
+                # Write the file with restricted permissions (owner read/write only)
                 full_path.write_text(content)
+                os.chmod(full_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
                 created_files.append(str(full_path))
                 rollback_info['files'].append({
                     'path': str(full_path),
@@ -127,6 +213,7 @@ def install_proposal(proposal_id: str) -> InstallationResult:
 
                 # Apply modification (for now, just overwrite)
                 full_path.write_text(content)
+                os.chmod(full_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
                 created_files.append(str(full_path))
                 rollback_info['files'].append({
                     'path': str(full_path),
