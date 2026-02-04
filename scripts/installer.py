@@ -17,9 +17,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import (
-    HOMUNCULUS_ROOT, generate_id, get_timestamp,
+    HOMUNCULUS_ROOT, DB_PATH, generate_id, get_timestamp,
     get_db_connection, db_execute
 )
+from pathlib import Path
+from typing import Union
 
 
 # Allowed directories for file installation (relative to HOMUNCULUS_ROOT)
@@ -103,31 +105,39 @@ class InstallationResult:
     rollback_info: Optional[Dict[str, Any]] = None
 
 
-def get_proposal(proposal_id: str) -> Optional[Dict[str, Any]]:
+def get_proposal(proposal_id: str, db_path: Union[str, Path] = None) -> Optional[Dict[str, Any]]:
     """Get a proposal by ID (full or partial)."""
+    if db_path is None:
+        db_path = DB_PATH
     proposals = db_execute(
         """SELECT p.*, g.desired_capability, g.gap_type as origin_gap_type
            FROM proposals p
            JOIN gaps g ON p.gap_id = g.id
            WHERE p.id = ? OR p.id LIKE ?""",
-        (proposal_id, f"{proposal_id}%")
+        (proposal_id, f"{proposal_id}%"),
+        db_path=db_path
     )
     return proposals[0] if proposals else None
 
 
-def get_capability(capability_id: str) -> Optional[Dict[str, Any]]:
+def get_capability(capability_id: str, db_path: Union[str, Path] = None) -> Optional[Dict[str, Any]]:
     """Get a capability by ID or name."""
+    if db_path is None:
+        db_path = DB_PATH
     caps = db_execute(
         """SELECT * FROM capabilities
            WHERE id = ? OR id LIKE ? OR name = ?""",
-        (capability_id, f"{capability_id}%", capability_id)
+        (capability_id, f"{capability_id}%", capability_id),
+        db_path=db_path
     )
     return caps[0] if caps else None
 
 
-def install_proposal(proposal_id: str) -> InstallationResult:
+def install_proposal(proposal_id: str, db_path: Union[str, Path] = None) -> InstallationResult:
     """Install a proposal's capability files."""
-    proposal = get_proposal(proposal_id)
+    if db_path is None:
+        db_path = DB_PATH
+    proposal = get_proposal(proposal_id, db_path=db_path)
     if not proposal:
         return InstallationResult(
             success=False,
@@ -235,7 +245,7 @@ def install_proposal(proposal_id: str) -> InstallationResult:
     timestamp = get_timestamp()
 
     try:
-        with get_db_connection() as conn:
+        with get_db_connection(db_path) as conn:
             # Insert capability
             conn.execute("""
                 INSERT INTO capabilities (
@@ -289,9 +299,11 @@ def install_proposal(proposal_id: str) -> InstallationResult:
     )
 
 
-def reject_proposal(proposal_id: str, reason: str = "") -> bool:
+def reject_proposal(proposal_id: str, reason: str = "", db_path: Union[str, Path] = None) -> bool:
     """Reject a proposal."""
-    proposal = get_proposal(proposal_id)
+    if db_path is None:
+        db_path = DB_PATH
+    proposal = get_proposal(proposal_id, db_path=db_path)
     if not proposal:
         return False
 
@@ -301,7 +313,7 @@ def reject_proposal(proposal_id: str, reason: str = "") -> bool:
     timestamp = get_timestamp()
 
     try:
-        with get_db_connection() as conn:
+        with get_db_connection(db_path) as conn:
             # Update proposal
             conn.execute(
                 """UPDATE proposals
@@ -323,15 +335,18 @@ def reject_proposal(proposal_id: str, reason: str = "") -> bool:
         return False
 
 
-def rollback_capability(capability_id: str, force: bool = False) -> InstallationResult:
+def rollback_capability(capability_id: str, force: bool = False, db_path: Union[str, Path] = None) -> InstallationResult:
     """
     Rollback an installed capability.
 
     Args:
         capability_id: ID or name of capability to rollback
         force: If True, rollback even with optional dependents (still blocks on required)
+        db_path: Optional database path for project-scoped operations
     """
-    capability = get_capability(capability_id)
+    if db_path is None:
+        db_path = DB_PATH
+    capability = get_capability(capability_id, db_path=db_path)
     if not capability:
         return InstallationResult(
             success=False,
@@ -349,7 +364,7 @@ def rollback_capability(capability_id: str, force: bool = False) -> Installation
         )
 
     # Check for dependents
-    rollback_check = check_rollback_safe(capability['id'])
+    rollback_check = check_rollback_safe(capability['id'], db_path=db_path)
     if not rollback_check['safe']:
         return InstallationResult(
             success=False,
@@ -383,7 +398,7 @@ def rollback_capability(capability_id: str, force: bool = False) -> Installation
     # Update database
     timestamp = get_timestamp()
     try:
-        with get_db_connection() as conn:
+        with get_db_connection(db_path) as conn:
             # Mark capability as rolled back
             conn.execute(
                 "UPDATE capabilities SET status = 'rolled_back', rolled_back_at = ? WHERE id = ?",
@@ -448,7 +463,8 @@ def add_dependency(
     capability_id: str,
     depends_on_id: str,
     dependency_type: str = "required",
-    notes: str = None
+    notes: str = None,
+    db_path: Union[str, Path] = None
 ) -> bool:
     """
     Add a dependency between two capabilities.
@@ -458,15 +474,18 @@ def add_dependency(
         depends_on_id: The capability that is depended upon
         dependency_type: 'required', 'optional', or 'suggested'
         notes: Optional notes about the dependency
+        db_path: Optional database path for project-scoped operations
 
     Returns:
         True if successful, False otherwise
     """
+    if db_path is None:
+        db_path = DB_PATH
     if dependency_type not in ('required', 'optional', 'suggested'):
         return False
 
     try:
-        with get_db_connection() as conn:
+        with get_db_connection(db_path) as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO capability_dependencies
                    (capability_id, depends_on_id, dependency_type, added_at, notes)
@@ -479,10 +498,12 @@ def add_dependency(
         return False
 
 
-def remove_dependency(capability_id: str, depends_on_id: str) -> bool:
+def remove_dependency(capability_id: str, depends_on_id: str, db_path: Union[str, Path] = None) -> bool:
     """Remove a dependency between two capabilities."""
+    if db_path is None:
+        db_path = DB_PATH
     try:
-        with get_db_connection() as conn:
+        with get_db_connection(db_path) as conn:
             cursor = conn.execute(
                 "DELETE FROM capability_dependencies WHERE capability_id = ? AND depends_on_id = ?",
                 (capability_id, depends_on_id)
@@ -493,14 +514,16 @@ def remove_dependency(capability_id: str, depends_on_id: str) -> bool:
         return False
 
 
-def get_dependencies(capability_id: str) -> List[Dict[str, Any]]:
+def get_dependencies(capability_id: str, db_path: Union[str, Path] = None) -> List[Dict[str, Any]]:
     """
     Get all capabilities that a capability depends on.
 
     Returns list of dicts with: depends_on_id, depends_on_name, dependency_type, notes
     """
+    if db_path is None:
+        db_path = DB_PATH
     # First get the capability by ID or name
-    cap = get_capability(capability_id)
+    cap = get_capability(capability_id, db_path=db_path)
     if not cap:
         return []
 
@@ -514,18 +537,21 @@ def get_dependencies(capability_id: str) -> List[Dict[str, Any]]:
            JOIN capabilities c ON cd.depends_on_id = c.id
            WHERE cd.capability_id = ?
            AND c.status = 'active'""",
-        (cap['id'],)
+        (cap['id'],),
+        db_path=db_path
     )
 
 
-def get_dependents(capability_id: str) -> List[Dict[str, Any]]:
+def get_dependents(capability_id: str, db_path: Union[str, Path] = None) -> List[Dict[str, Any]]:
     """
     Get all capabilities that depend on this capability.
 
     Returns list of dicts with: capability_id, capability_name, dependency_type
     """
+    if db_path is None:
+        db_path = DB_PATH
     # First get the capability by ID or name
-    cap = get_capability(capability_id)
+    cap = get_capability(capability_id, db_path=db_path)
     if not cap:
         return []
 
@@ -538,11 +564,12 @@ def get_dependents(capability_id: str) -> List[Dict[str, Any]]:
            JOIN capabilities c ON cd.capability_id = c.id
            WHERE cd.depends_on_id = ?
            AND c.status = 'active'""",
-        (cap['id'],)
+        (cap['id'],),
+        db_path=db_path
     )
 
 
-def check_rollback_safe(capability_id: str) -> Dict[str, Any]:
+def check_rollback_safe(capability_id: str, db_path: Union[str, Path] = None) -> Dict[str, Any]:
     """
     Check if a capability can be safely rolled back.
 
@@ -551,7 +578,9 @@ def check_rollback_safe(capability_id: str) -> Dict[str, Any]:
         - dependents: list of capabilities that depend on this one
         - message: explanation
     """
-    dependents = get_dependents(capability_id)
+    if db_path is None:
+        db_path = DB_PATH
+    dependents = get_dependents(capability_id, db_path=db_path)
 
     if not dependents:
         return {

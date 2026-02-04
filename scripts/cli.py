@@ -415,13 +415,14 @@ def cmd_config(args):
 
 def cmd_detect(args):
     """Manually trigger gap detection."""
+    db_path = get_db_for_args(args)
     print()
     print("Running gap detection...")
 
     try:
         # Import detector module
         from detector import run_detection
-        gaps = run_detection()
+        gaps = run_detection(db_path=db_path)
 
         if gaps:
             print(f"\nDetected {len(gaps)} gap(s):")
@@ -496,9 +497,10 @@ def cmd_review(args):
     """Review a proposal."""
     from installer import get_proposal, format_proposal_review
 
+    db_path = get_db_for_args(args)
     proposal_id = args.proposal_id
 
-    proposal = get_proposal(proposal_id)
+    proposal = get_proposal(proposal_id, db_path=db_path)
     if not proposal:
         print(f"\nProposal not found: {proposal_id}")
         return 1
@@ -513,11 +515,12 @@ def cmd_approve(args):
     from installer import install_proposal, get_proposal
     from utils import HOMUNCULUS_ROOT
 
+    db_path = get_db_for_args(args)
     proposal_id = args.proposal_id
     dry_run = getattr(args, 'dry_run', False)
 
     # First verify proposal exists
-    proposal = get_proposal(proposal_id)
+    proposal = get_proposal(proposal_id, db_path=db_path)
     if not proposal:
         print(f"\nProposal not found: {proposal_id}")
         return 1
@@ -582,7 +585,7 @@ def cmd_approve(args):
         return 0
 
     # Install
-    result = install_proposal(proposal['id'])
+    result = install_proposal(proposal['id'], db_path=db_path)
 
     if result.success:
         print()
@@ -606,11 +609,12 @@ def cmd_reject(args):
     """Reject a proposal."""
     from installer import reject_proposal, get_proposal
 
+    db_path = get_db_for_args(args)
     proposal_id = args.proposal_id
     reason = getattr(args, 'reason', '') or "User rejected"
 
     # Verify proposal exists
-    proposal = get_proposal(proposal_id)
+    proposal = get_proposal(proposal_id, db_path=db_path)
     if not proposal:
         print(f"\nProposal not found: {proposal_id}")
         return 1
@@ -624,7 +628,7 @@ def cmd_reject(args):
     print(f"  Name: {proposal['capability_name']}")
     print(f"  Reason: {reason}")
 
-    if reject_proposal(proposal['id'], reason):
+    if reject_proposal(proposal['id'], reason, db_path=db_path):
         print("\nProposal rejected.")
         print("The gap has been returned to pending status.")
     else:
@@ -639,11 +643,12 @@ def cmd_rollback(args):
     """Rollback a capability."""
     from installer import rollback_capability, get_capability, check_rollback_safe, get_dependents
 
+    db_path = get_db_for_args(args)
     capability_name = args.capability_name
     force = getattr(args, 'force', False)
 
     # Verify capability exists
-    capability = get_capability(capability_name)
+    capability = get_capability(capability_name, db_path=db_path)
     if not capability:
         print(f"\nCapability not found: {capability_name}")
         return 1
@@ -663,7 +668,7 @@ def cmd_rollback(args):
     print()
 
     # Check for dependents
-    dependents = get_dependents(capability['id'])
+    dependents = get_dependents(capability['id'], db_path=db_path)
     if dependents:
         print("  -- Dependencies --")
         print(f"  The following capabilities depend on this one:")
@@ -689,7 +694,7 @@ def cmd_rollback(args):
         return 0
 
     # Rollback
-    result = rollback_capability(capability['id'], force=force)
+    result = rollback_capability(capability['id'], force=force, db_path=db_path)
 
     if result.success:
         print()
@@ -754,7 +759,7 @@ def cmd_dependencies(args):
         print("Error: capability name required")
         return 1
 
-    capability = get_capability(capability_name)
+    capability = get_capability(capability_name, db_path=db_path)
     if not capability:
         print(f"\nCapability not found: {capability_name}")
         return 1
@@ -765,7 +770,7 @@ def cmd_dependencies(args):
         print("-" * 60)
 
         # Show what this capability depends on
-        deps = get_dependencies(capability['id'])
+        deps = get_dependencies(capability['id'], db_path=db_path)
         print("\n  Depends on:")
         if deps:
             for d in deps:
@@ -776,7 +781,7 @@ def cmd_dependencies(args):
             print("    (none)")
 
         # Show what depends on this capability
-        dependents = get_dependents(capability['id'])
+        dependents = get_dependents(capability['id'], db_path=db_path)
         print("\n  Depended on by:")
         if dependents:
             for d in dependents:
@@ -796,12 +801,12 @@ def cmd_dependencies(args):
             print("Error: --depends-on required")
             return 1
 
-        target = get_capability(depends_on)
+        target = get_capability(depends_on, db_path=db_path)
         if not target:
             print(f"\nDependency target not found: {depends_on}")
             return 1
 
-        if add_dependency(capability['id'], target['id'], dep_type, notes):
+        if add_dependency(capability['id'], target['id'], dep_type, notes, db_path=db_path):
             print(f"\nAdded dependency: {capability['name']} -> {target['name']} ({dep_type})")
         else:
             print("\nFailed to add dependency")
@@ -816,12 +821,12 @@ def cmd_dependencies(args):
             print("Error: --depends-on required")
             return 1
 
-        target = get_capability(depends_on)
+        target = get_capability(depends_on, db_path=db_path)
         if not target:
             print(f"\nDependency target not found: {depends_on}")
             return 1
 
-        if remove_dependency(capability['id'], target['id']):
+        if remove_dependency(capability['id'], target['id'], db_path=db_path):
             print(f"\nRemoved dependency: {capability['name']} -> {target['name']}")
         else:
             print("\nDependency not found or failed to remove")
@@ -987,12 +992,13 @@ def cmd_variants(args):
 
 def cmd_dismiss_gap(args):
     """Dismiss a gap permanently."""
+    db_path = get_db_for_args(args)
     gap_id = args.gap_id
 
     try:
         from utils import get_db_connection, get_timestamp
 
-        with get_db_connection() as conn:
+        with get_db_connection(db_path) as conn:
             cursor = conn.execute(
                 "UPDATE gaps SET status = 'dismissed', dismissed_at = ?, dismissed_reason = ? WHERE id = ? OR id LIKE ?",
                 (get_timestamp(), args.reason or "User dismissed", gap_id, f"{gap_id}%")

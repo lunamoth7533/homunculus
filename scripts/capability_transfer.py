@@ -12,9 +12,14 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import os
+import stat
 from utils import (
     HOMUNCULUS_ROOT, get_db_connection, db_execute, get_timestamp,
     generate_id
+)
+from installer import (
+    validate_install_path, safe_path_join, validate_content
 )
 
 EXPORT_VERSION = "1.0"
@@ -112,7 +117,8 @@ def export_to_file(capability_name: str, output_path: Optional[str] = None) -> O
 
 def import_capability(
     import_data: Dict[str, Any],
-    force: bool = False
+    force: bool = False,
+    skip_validation: bool = False
 ) -> Dict[str, Any]:
     """
     Import a capability from exported data.
@@ -120,9 +126,10 @@ def import_capability(
     Args:
         import_data: Exported capability dictionary
         force: Overwrite if capability with same name exists
+        skip_validation: Skip content validation (use with caution, for trusted sources only)
 
     Returns:
-        Dict with import result (success, message, capability_id)
+        Dict with import result (success, message, capability_id, warnings)
     """
     # Validate export format
     if import_data.get('export_version') != EXPORT_VERSION:
@@ -152,7 +159,38 @@ def import_capability(
             'message': f"Capability '{cap_info['name']}' already exists. Use --force to overwrite."
         }
 
-    # Write files
+    # SECURITY: Validate paths and content before writing
+    all_warnings = []
+    if not skip_validation:
+        for f in files:
+            rel_path = f.get('path', '')
+            content = f.get('content', '')
+
+            if not rel_path:
+                continue
+
+            # Validate path is in allowed directory
+            if not validate_install_path(rel_path):
+                return {
+                    'success': False,
+                    'message': f"Import blocked: path not allowed: {rel_path}. Must be in evolved/"
+                }
+
+            # Validate content for suspicious patterns
+            if content:
+                warnings = validate_content(content, rel_path)
+                if warnings:
+                    all_warnings.extend([f"{rel_path}: {w}" for w in warnings])
+
+    # If there are warnings, require explicit acknowledgment
+    if all_warnings and not force:
+        return {
+            'success': False,
+            'message': "Import blocked: suspicious content detected. Use --force to import anyway.",
+            'warnings': all_warnings
+        }
+
+    # Write files with security measures
     files_created = []
     try:
         for f in files:
@@ -162,9 +200,27 @@ def import_capability(
             if not rel_path or not content:
                 continue
 
-            full_path = HOMUNCULUS_ROOT / rel_path
+            # SECURITY: Use safe_path_join to prevent path traversal
+            try:
+                full_path = safe_path_join(HOMUNCULUS_ROOT, rel_path)
+            except ValueError as e:
+                # Rollback and abort on path traversal attempt
+                for created in files_created:
+                    try:
+                        Path(created).unlink()
+                    except Exception:
+                        pass
+                return {
+                    'success': False,
+                    'message': f"Import blocked: {e}"
+                }
+
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content)
+
+            # SECURITY: Set restricted permissions (owner read/write only)
+            os.chmod(full_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+
             files_created.append(str(full_path))
 
     except Exception as e:
@@ -219,12 +275,15 @@ def import_capability(
             'message': f"Database error: {e}"
         }
 
-    return {
+    result = {
         'success': True,
         'message': f"Imported capability: {cap_info['name']}",
         'capability_id': capability_id,
         'files_created': files_created
     }
+    if all_warnings:
+        result['warnings'] = all_warnings
+    return result
 
 
 def import_from_file(file_path: str, force: bool = False) -> Dict[str, Any]:

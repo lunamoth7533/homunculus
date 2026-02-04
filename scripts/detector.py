@@ -14,9 +14,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import (
-    HOMUNCULUS_ROOT, generate_id, get_timestamp, db_execute,
+    HOMUNCULUS_ROOT, DB_PATH, generate_id, get_timestamp, db_execute,
     read_jsonl, load_yaml_file, get_db_connection
 )
+from typing import Union
 from gap_types import get_gap_info, get_default_scope, get_all_gap_types
 
 
@@ -66,9 +67,10 @@ class DetectedGap:
 class GapDetector:
     """Main gap detection engine."""
 
-    def __init__(self):
+    def __init__(self, db_path: Union[str, Path] = None):
         self.rules: Dict[str, DetectorRule] = {}
         self.rules_dir = HOMUNCULUS_ROOT / "meta" / "detector-rules"
+        self.db_path = db_path if db_path is not None else DB_PATH
         self._load_rules()
 
     def _load_rules(self):
@@ -361,7 +363,8 @@ class GapDetector:
                 """SELECT id, desired_capability, domain, confidence, evidence_summary
                    FROM gaps
                    WHERE gap_type = ? AND status IN ('pending', 'synthesizing')""",
-                (gap.gap_type,)
+                (gap.gap_type,),
+                db_path=self.db_path
             )
 
             best_match = None
@@ -391,7 +394,7 @@ class GapDetector:
     def save_gap(self, gap: DetectedGap) -> bool:
         """Save a detected gap to the database with cross-session deduplication."""
         try:
-            with get_db_connection() as conn:
+            with get_db_connection(self.db_path) as conn:
                 # Check for similar existing gap (cross-session deduplication)
                 similar_id, similarity = self._find_similar_gap(gap)
 
@@ -467,9 +470,11 @@ class GapDetector:
             return False
 
 
-def run_detection(limit: int = 100) -> List[DetectedGap]:
+def run_detection(limit: int = 100, db_path: Union[str, Path] = None) -> List[DetectedGap]:
     """Run gap detection on recent observations."""
-    detector = GapDetector()
+    if db_path is None:
+        db_path = DB_PATH
+    detector = GapDetector(db_path=db_path)
 
     if not detector.rules:
         print("No detector rules loaded. Add rules to ~/homunculus/meta/detector-rules/")

@@ -5,12 +5,21 @@ gap_type: speed
 priority: medium
 enabled: true
 
+# NOTE: This detector rule is partially non-functional.
+# The friction_turn_count trigger below will NEVER fire because
+# process_observation.py does not capture friction metrics.
+# TODO: Implement friction metric capture in Claude Code hooks,
+# then remove this note. See: https://github.com/anthropics/homunculus/issues/XX
+
 triggers:
+  # TODO: This trigger is non-functional until hook integration captures
+  # friction_turn_count metrics. Kept for future implementation.
   - condition: "friction_turn_count > 15"
     extract:
       desired_capability: "Task taking too many turns to complete"
     confidence_boost: 0.25
 
+  # These text-based triggers work correctly
   - condition: "raw_json contains 'taking too long'"
     confidence_boost: 0.3
 

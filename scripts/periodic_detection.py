@@ -89,11 +89,32 @@ def apply_confidence_decay() -> int:
         return 0
 
 
+def set_last_attempt_time(timestamp: str = None) -> bool:
+    """Record current time as last detection attempt time (for visibility into failures)."""
+    if timestamp is None:
+        timestamp = get_timestamp()
+
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO metadata (key, value, updated_at)
+                   VALUES ('last_detection_attempt', ?, ?)""",
+                (timestamp, timestamp)
+            )
+            conn.commit()
+        return True
+    except Exception:
+        return False
+
+
 def run_periodic_detection() -> dict:
     """
     Run detection if periodic interval has passed.
     Also applies confidence decay to old gaps.
     Returns dict with results.
+
+    Note: last_detection_time is set AFTER successful detection to avoid
+    suppressing retries when detection fails.
     """
     if not should_run_detection():
         return {
@@ -101,8 +122,8 @@ def run_periodic_detection() -> dict:
             'reason': 'Not enough time elapsed since last detection'
         }
 
-    # Record that we're starting detection
-    set_last_detection_time()
+    # Record that we're attempting detection (for visibility)
+    set_last_attempt_time()
 
     # Apply confidence decay to old gaps
     decayed = apply_confidence_decay()
@@ -110,6 +131,9 @@ def run_periodic_detection() -> dict:
     try:
         from detector import run_detection
         gaps = run_detection()
+
+        # Only record successful detection time AFTER success
+        set_last_detection_time()
 
         return {
             'ran': True,
@@ -125,6 +149,7 @@ def run_periodic_detection() -> dict:
             ]
         }
     except Exception as e:
+        # Don't update last_detection_time on failure - allow retry on next interval
         return {
             'ran': True,
             'error': str(e),
