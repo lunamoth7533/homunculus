@@ -9,7 +9,7 @@
       "name": "homunculus",
       "source": "./",
       "description": "Self-evolution system for Claude Code - automatic gap detection and capability synthesis with human-in-the-loop approval",
-      "version": "1.0.0"
+      "version": "1.2.0"
     }
   ]
 }
