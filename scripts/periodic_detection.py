@@ -64,9 +64,35 @@ def should_run_detection() -> bool:
     return elapsed >= timedelta(minutes=periodic_minutes)
 
 
+def apply_confidence_decay() -> int:
+    """
+    Apply confidence decay to old pending gaps.
+    Gaps lose 5% confidence per day of inactivity.
+
+    Returns number of gaps updated.
+    """
+    try:
+        with get_db_connection() as conn:
+            # Decay gaps that haven't been updated in 24+ hours
+            # Confidence decays by 5% per day, minimum 0.1
+            cursor = conn.execute("""
+                UPDATE gaps
+                SET confidence = MAX(0.1, confidence * 0.95),
+                    updated_at = ?
+                WHERE status = 'pending'
+                  AND updated_at < datetime('now', '-1 day')
+            """, (get_timestamp(),))
+            conn.commit()
+            return cursor.rowcount
+    except Exception as e:
+        print(f"Error applying confidence decay: {e}")
+        return 0
+
+
 def run_periodic_detection() -> dict:
     """
     Run detection if periodic interval has passed.
+    Also applies confidence decay to old gaps.
     Returns dict with results.
     """
     if not should_run_detection():
@@ -78,6 +104,9 @@ def run_periodic_detection() -> dict:
     # Record that we're starting detection
     set_last_detection_time()
 
+    # Apply confidence decay to old gaps
+    decayed = apply_confidence_decay()
+
     try:
         from detector import run_detection
         gaps = run_detection()
@@ -85,6 +114,7 @@ def run_periodic_detection() -> dict:
         return {
             'ran': True,
             'gaps_detected': len(gaps),
+            'gaps_decayed': decayed,
             'gaps': [
                 {
                     'id': g.id,
@@ -98,7 +128,8 @@ def run_periodic_detection() -> dict:
         return {
             'ran': True,
             'error': str(e),
-            'gaps_detected': 0
+            'gaps_detected': 0,
+            'gaps_decayed': decayed
         }
 
 
@@ -109,6 +140,7 @@ def main():
     parser = argparse.ArgumentParser(description="Periodic gap detection")
     parser.add_argument("--force", action="store_true", help="Force detection even if interval hasn't passed")
     parser.add_argument("--status", action="store_true", help="Show last detection time")
+    parser.add_argument("--decay", action="store_true", help="Apply confidence decay to old gaps")
 
     args = parser.parse_args()
 
@@ -126,21 +158,31 @@ def main():
         print(f"Should run: {should_run_detection()}")
         return 0
 
+    if args.decay:
+        decayed = apply_confidence_decay()
+        print(f"Applied confidence decay to {decayed} gap(s).")
+        return 0
+
     if args.force:
         set_last_detection_time()
+        decayed = apply_confidence_decay()
         from detector import run_detection
         gaps = run_detection()
-        print(f"Detection complete. Found {len(gaps)} gap(s).")
+        print(f"Detection complete. Found {len(gaps)} gap(s). Decayed {decayed} old gaps.")
         return 0
 
     result = run_periodic_detection()
 
     if result['ran']:
         gaps_count = result.get('gaps_detected', 0)
+        decayed_count = result.get('gaps_decayed', 0)
         if 'error' in result:
             print(f"Detection error: {result['error']}")
         else:
-            print(f"Periodic detection complete. Found {gaps_count} gap(s).")
+            msg = f"Periodic detection complete. Found {gaps_count} gap(s)."
+            if decayed_count > 0:
+                msg += f" Decayed {decayed_count} old gaps."
+            print(msg)
     else:
         print(f"Skipped: {result.get('reason', 'unknown')}")
 
