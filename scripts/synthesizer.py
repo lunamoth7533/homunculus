@@ -21,9 +21,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import (
-    HOMUNCULUS_ROOT, generate_id, get_timestamp, db_execute,
+    HOMUNCULUS_ROOT, DB_PATH, generate_id, get_timestamp, db_execute,
     load_yaml_file, get_db_connection, load_config
 )
+from typing import Union
 from gap_types import get_gap_info, get_capability_types
 
 
@@ -183,10 +184,11 @@ class Proposal:
 class CapabilitySynthesizer:
     """Main synthesis engine."""
 
-    def __init__(self):
+    def __init__(self, db_path: Union[str, Path] = None):
         self.templates: Dict[str, SynthesisTemplate] = {}
         self.variants: Dict[str, List[TemplateVariant]] = {}  # template_id -> variants
         self.templates_dir = HOMUNCULUS_ROOT / "meta" / "synthesis-templates"
+        self.db_path = db_path if db_path is not None else DB_PATH
         self._load_templates()
         self._load_variants()
 
@@ -208,7 +210,8 @@ class CapabilitySynthesizer:
         """Load template variants from database for A/B testing."""
         try:
             rows = db_execute(
-                """SELECT * FROM template_variants WHERE enabled = 1"""
+                """SELECT * FROM template_variants WHERE enabled = 1""",
+                db_path=self.db_path
             )
             for row in rows:
                 variant = TemplateVariant.from_dict(row)
@@ -763,7 +766,7 @@ Add to `~/.claude/settings.json`:
     def save_proposal(self, proposal: Proposal) -> bool:
         """Save a proposal to the database."""
         try:
-            with get_db_connection() as conn:
+            with get_db_connection(self.db_path) as conn:
                 conn.execute("""
                     INSERT INTO proposals (
                         id, created_at, gap_id, capability_type, capability_name,
@@ -803,9 +806,11 @@ Add to `~/.claude/settings.json`:
             return False
 
 
-def run_synthesis(gap_id: Optional[str] = None, limit: int = 5) -> List[Proposal]:
+def run_synthesis(gap_id: Optional[str] = None, limit: int = 5, db_path: Union[str, Path] = None) -> List[Proposal]:
     """Run synthesis on pending gaps."""
-    synthesizer = CapabilitySynthesizer()
+    if db_path is None:
+        db_path = DB_PATH
+    synthesizer = CapabilitySynthesizer(db_path=db_path)
 
     if not synthesizer.templates:
         print("No synthesis templates loaded.")
@@ -815,7 +820,8 @@ def run_synthesis(gap_id: Optional[str] = None, limit: int = 5) -> List[Proposal
     if gap_id:
         gaps = db_execute(
             "SELECT * FROM gaps WHERE id = ? OR id LIKE ?",
-            (gap_id, f"{gap_id}%")
+            (gap_id, f"{gap_id}%"),
+            db_path=db_path
         )
     else:
         gaps = db_execute(
@@ -823,7 +829,8 @@ def run_synthesis(gap_id: Optional[str] = None, limit: int = 5) -> List[Proposal
                WHERE status = 'pending'
                ORDER BY confidence DESC
                LIMIT ?""",
-            (limit,)
+            (limit,),
+            db_path=db_path
         )
 
     if not gaps:

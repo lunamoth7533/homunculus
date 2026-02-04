@@ -7,19 +7,23 @@ Runs gap detection if enough time has passed since last run.
 import sys
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from typing import Union
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import (
-    get_db_connection, db_execute, load_config, get_timestamp
+    get_db_connection, db_execute, load_config, get_timestamp, DB_PATH
 )
 
 
-def get_last_detection_time() -> datetime:
+def get_last_detection_time(db_path: Union[str, Path] = None) -> datetime:
     """Get timestamp of last detection run."""
+    if db_path is None:
+        db_path = DB_PATH
     try:
         result = db_execute(
-            "SELECT value FROM metadata WHERE key = 'last_detection_time'"
+            "SELECT value FROM metadata WHERE key = 'last_detection_time'",
+            db_path=db_path
         )
         if result:
             return datetime.fromisoformat(result[0]['value'].replace('Z', '+00:00'))
@@ -30,13 +34,15 @@ def get_last_detection_time() -> datetime:
     return datetime.min.replace(tzinfo=timezone.utc)
 
 
-def set_last_detection_time(timestamp: str = None) -> bool:
+def set_last_detection_time(timestamp: str = None, db_path: Union[str, Path] = None) -> bool:
     """Record current time as last detection time."""
     if timestamp is None:
         timestamp = get_timestamp()
+    if db_path is None:
+        db_path = DB_PATH
 
     try:
-        with get_db_connection() as conn:
+        with get_db_connection(db_path) as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO metadata (key, value, updated_at)
                    VALUES ('last_detection_time', ?, ?)""",
@@ -48,8 +54,10 @@ def set_last_detection_time(timestamp: str = None) -> bool:
         return False
 
 
-def should_run_detection() -> bool:
+def should_run_detection(db_path: Union[str, Path] = None) -> bool:
     """Check if detection should run based on periodic_minutes config."""
+    if db_path is None:
+        db_path = DB_PATH
     config = load_config()
     detection_config = config.get('detection', {})
     periodic_minutes = detection_config.get('periodic_minutes', 30)
@@ -57,22 +65,24 @@ def should_run_detection() -> bool:
     if periodic_minutes <= 0:
         return False
 
-    last_run = get_last_detection_time()
+    last_run = get_last_detection_time(db_path=db_path)
     now = datetime.now(timezone.utc)
     elapsed = now - last_run
 
     return elapsed >= timedelta(minutes=periodic_minutes)
 
 
-def apply_confidence_decay() -> int:
+def apply_confidence_decay(db_path: Union[str, Path] = None) -> int:
     """
     Apply confidence decay to old pending gaps.
     Gaps lose 5% confidence per day of inactivity.
 
     Returns number of gaps updated.
     """
+    if db_path is None:
+        db_path = DB_PATH
     try:
-        with get_db_connection() as conn:
+        with get_db_connection(db_path) as conn:
             # Decay gaps that haven't been updated in 24+ hours
             # Confidence decays by 5% per day, minimum 0.1
             cursor = conn.execute("""
@@ -89,27 +99,56 @@ def apply_confidence_decay() -> int:
         return 0
 
 
-def run_periodic_detection() -> dict:
+def set_last_attempt_time(timestamp: str = None, db_path: Union[str, Path] = None) -> bool:
+    """Record current time as last detection attempt time (for visibility into failures)."""
+    if timestamp is None:
+        timestamp = get_timestamp()
+    if db_path is None:
+        db_path = DB_PATH
+
+    try:
+        with get_db_connection(db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO metadata (key, value, updated_at)
+                   VALUES ('last_detection_attempt', ?, ?)""",
+                (timestamp, timestamp)
+            )
+            conn.commit()
+        return True
+    except Exception:
+        return False
+
+
+def run_periodic_detection(db_path: Union[str, Path] = None) -> dict:
     """
     Run detection if periodic interval has passed.
     Also applies confidence decay to old gaps.
     Returns dict with results.
+
+    Note: last_detection_time is set AFTER successful detection to avoid
+    suppressing retries when detection fails.
     """
-    if not should_run_detection():
+    if db_path is None:
+        db_path = DB_PATH
+
+    if not should_run_detection(db_path=db_path):
         return {
             'ran': False,
             'reason': 'Not enough time elapsed since last detection'
         }
 
-    # Record that we're starting detection
-    set_last_detection_time()
+    # Record that we're attempting detection (for visibility)
+    set_last_attempt_time(db_path=db_path)
 
     # Apply confidence decay to old gaps
-    decayed = apply_confidence_decay()
+    decayed = apply_confidence_decay(db_path=db_path)
 
     try:
         from detector import run_detection
-        gaps = run_detection()
+        gaps = run_detection(db_path=db_path)
+
+        # Only record successful detection time AFTER success
+        set_last_detection_time(db_path=db_path)
 
         return {
             'ran': True,
@@ -125,6 +164,7 @@ def run_periodic_detection() -> dict:
             ]
         }
     except Exception as e:
+        # Don't update last_detection_time on failure - allow retry on next interval
         return {
             'ran': True,
             'error': str(e),
@@ -141,11 +181,18 @@ def main():
     parser.add_argument("--force", action="store_true", help="Force detection even if interval hasn't passed")
     parser.add_argument("--status", action="store_true", help="Show last detection time")
     parser.add_argument("--decay", action="store_true", help="Apply confidence decay to old gaps")
+    parser.add_argument("--project", type=Path, help="Project path for project-scoped operations")
 
     args = parser.parse_args()
 
+    # Determine database path
+    db_path = None
+    if args.project:
+        from utils import get_project_db_path
+        db_path = get_project_db_path(args.project)
+
     if args.status:
-        last_run = get_last_detection_time()
+        last_run = get_last_detection_time(db_path=db_path)
         config = load_config()
         periodic_minutes = config.get('detection', {}).get('periodic_minutes', 30)
 
@@ -155,23 +202,23 @@ def main():
             print(f"Last detection: {last_run.isoformat()}")
 
         print(f"Interval: {periodic_minutes} minutes")
-        print(f"Should run: {should_run_detection()}")
+        print(f"Should run: {should_run_detection(db_path=db_path)}")
         return 0
 
     if args.decay:
-        decayed = apply_confidence_decay()
+        decayed = apply_confidence_decay(db_path=db_path)
         print(f"Applied confidence decay to {decayed} gap(s).")
         return 0
 
     if args.force:
-        set_last_detection_time()
-        decayed = apply_confidence_decay()
+        set_last_detection_time(db_path=db_path)
+        decayed = apply_confidence_decay(db_path=db_path)
         from detector import run_detection
-        gaps = run_detection()
+        gaps = run_detection(db_path=db_path)
         print(f"Detection complete. Found {len(gaps)} gap(s). Decayed {decayed} old gaps.")
         return 0
 
-    result = run_periodic_detection()
+    result = run_periodic_detection(db_path=db_path)
 
     if result['ran']:
         gaps_count = result.get('gaps_detected', 0)
