@@ -11,8 +11,9 @@ Supports two modes:
 import json
 import os
 import re
+import random
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -132,6 +133,34 @@ class SynthesisTemplate:
 
 
 @dataclass
+class TemplateVariant:
+    """A variant of a synthesis template for A/B testing."""
+    id: str
+    template_id: str
+    variant_name: str
+    variant_description: str
+    weight: float
+    patches: Dict[str, Any]  # JSON patches to apply to base template
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TemplateVariant':
+        patches = data.get('patches_json')
+        if isinstance(patches, str):
+            try:
+                patches = json.loads(patches)
+            except json.JSONDecodeError:
+                patches = {}
+        return cls(
+            id=data.get('id', ''),
+            template_id=data.get('template_id', ''),
+            variant_name=data.get('variant_name', 'default'),
+            variant_description=data.get('variant_description', ''),
+            weight=data.get('weight', 1.0),
+            patches=patches or {}
+        )
+
+
+@dataclass
 class Proposal:
     """A synthesized capability proposal."""
     id: str
@@ -145,6 +174,7 @@ class Proposal:
     reasoning: str
     template_id: str
     template_version: int
+    template_variant: Optional[str]  # For A/B testing
     files: List[Dict[str, str]]
     rollback_instructions: str
     project_path: Optional[str] = None
@@ -155,8 +185,10 @@ class CapabilitySynthesizer:
 
     def __init__(self):
         self.templates: Dict[str, SynthesisTemplate] = {}
+        self.variants: Dict[str, List[TemplateVariant]] = {}  # template_id -> variants
         self.templates_dir = HOMUNCULUS_ROOT / "meta" / "synthesis-templates"
         self._load_templates()
+        self._load_variants()
 
     def _load_templates(self):
         """Load all synthesis templates."""
@@ -171,6 +203,64 @@ class CapabilitySynthesizer:
                     self.templates[template.output_type] = template
             except Exception as e:
                 print(f"Warning: Failed to load template {template_file}: {e}")
+
+    def _load_variants(self):
+        """Load template variants from database for A/B testing."""
+        try:
+            rows = db_execute(
+                """SELECT * FROM template_variants WHERE enabled = 1"""
+            )
+            for row in rows:
+                variant = TemplateVariant.from_dict(row)
+                if variant.template_id not in self.variants:
+                    self.variants[variant.template_id] = []
+                self.variants[variant.template_id].append(variant)
+        except Exception:
+            # Table may not exist in older databases
+            pass
+
+    def _select_variant(self, template_id: str) -> Optional[TemplateVariant]:
+        """
+        Select a variant for A/B testing using weighted random selection.
+        Returns None if no variants exist (use base template).
+        """
+        variants = self.variants.get(template_id, [])
+        if not variants:
+            return None
+
+        # Weighted random selection
+        total_weight = sum(v.weight for v in variants)
+        if total_weight <= 0:
+            return None
+
+        r = random.random() * total_weight
+        cumulative = 0
+        for variant in variants:
+            cumulative += variant.weight
+            if r <= cumulative:
+                return variant
+
+        return variants[-1] if variants else None
+
+    def _apply_variant_patches(
+        self,
+        template: SynthesisTemplate,
+        variant: TemplateVariant
+    ) -> SynthesisTemplate:
+        """Apply variant patches to create a modified template."""
+        # Create a copy of the template with variant modifications
+        import copy
+        modified = copy.copy(template)
+
+        patches = variant.patches
+        if 'synthesis_prompt' in patches:
+            modified.synthesis_prompt = patches['synthesis_prompt']
+        if 'structure' in patches:
+            modified.structure = patches['structure']
+        if 'output_path' in patches:
+            modified.output_path = patches['output_path']
+
+        return modified
 
     def select_template(self, gap_type: str) -> Optional[SynthesisTemplate]:
         """Select the best template for a gap type."""
@@ -193,11 +283,22 @@ class CapabilitySynthesizer:
     def synthesize_from_gap(self, gap: Dict[str, Any]) -> Optional[Proposal]:
         """Synthesize a proposal from a gap."""
         gap_type = gap.get('gap_type', '')
-        template = self.select_template(gap_type)
+        base_template = self.select_template(gap_type)
 
-        if not template:
+        if not base_template:
             print(f"No template found for gap type: {gap_type}")
             return None
+
+        # Check for A/B testing variant
+        variant = self._select_variant(base_template.id)
+        variant_name = None
+
+        if variant:
+            # Apply variant patches to template
+            template = self._apply_variant_patches(base_template, variant)
+            variant_name = variant.variant_name
+        else:
+            template = base_template
 
         # Generate capability name from desired capability
         name = self._generate_name(gap.get('desired_capability', ''), gap.get('domain', ''))
@@ -217,8 +318,9 @@ class CapabilitySynthesizer:
             scope=gap.get('recommended_scope', 'global'),
             confidence=gap.get('confidence', 0.5),
             reasoning=f"Generated to address: {gap.get('desired_capability', '')}",
-            template_id=template.id,
-            template_version=template.version,
+            template_id=base_template.id,  # Use base template ID for tracking
+            template_version=base_template.version,
+            template_variant=variant_name,  # A/B testing variant
             files=[{
                 "path": template.output_path.format(slug=slug),
                 "content": content,
@@ -666,9 +768,9 @@ Add to `~/.claude/settings.json`:
                     INSERT INTO proposals (
                         id, created_at, gap_id, capability_type, capability_name,
                         capability_summary, scope, project_path, confidence, reasoning,
-                        template_id, template_version, synthesis_model, status,
+                        template_id, template_version, template_variant, synthesis_model, status,
                         files_json, rollback_instructions
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
                 """, (
                     proposal.id,
                     get_timestamp(),
@@ -682,6 +784,7 @@ Add to `~/.claude/settings.json`:
                     proposal.reasoning,
                     proposal.template_id,
                     proposal.template_version,
+                    proposal.template_variant,  # A/B testing variant
                     "template-based",  # synthesis_model
                     json.dumps(proposal.files),
                     proposal.rollback_instructions

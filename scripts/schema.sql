@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS proposals (
     reasoning TEXT,
     template_id TEXT NOT NULL,
     template_version INTEGER NOT NULL DEFAULT 1,
+    template_variant TEXT,  -- For A/B testing: which variant was used
     synthesis_model TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'installed', 'rolled_back')),
     reviewed_at TEXT,
@@ -247,6 +248,27 @@ CREATE TABLE IF NOT EXISTS synthesis_templates (
 );
 
 CREATE INDEX IF NOT EXISTS idx_synthesis_templates_type ON synthesis_templates(output_type);
+
+-- ============================================================
+-- TEMPLATE VARIANTS (for A/B testing)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS template_variants (
+    id TEXT PRIMARY KEY,
+    template_id TEXT NOT NULL,
+    variant_name TEXT NOT NULL,
+    variant_description TEXT,
+    weight REAL DEFAULT 1.0,  -- Higher weight = more likely to be selected
+    enabled INTEGER DEFAULT 1,
+    patches_json TEXT,  -- JSON patches to apply to base template
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT DEFAULT 'system',
+
+    UNIQUE(template_id, variant_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_template_variants_template ON template_variants(template_id);
+CREATE INDEX IF NOT EXISTS idx_template_variants_enabled ON template_variants(enabled);
 
 -- ============================================================
 -- META-OBSERVATIONS
@@ -423,3 +445,20 @@ FROM capability_dependencies cd
 JOIN capabilities c1 ON cd.capability_id = c1.id
 JOIN capabilities c2 ON cd.depends_on_id = c2.id
 WHERE c1.status = 'active' AND c2.status = 'active';
+
+CREATE VIEW IF NOT EXISTS v_template_variant_performance AS
+SELECT
+    template_id,
+    template_variant,
+    COUNT(*) as total_proposals,
+    SUM(CASE WHEN status IN ('approved', 'installed') THEN 1 ELSE 0 END) as approved,
+    SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
+    ROUND(
+        CAST(SUM(CASE WHEN status IN ('approved', 'installed') THEN 1 ELSE 0 END) AS REAL) /
+        NULLIF(COUNT(*), 0) * 100,
+        2
+    ) as approval_rate,
+    AVG(confidence) as avg_confidence
+FROM proposals
+WHERE template_variant IS NOT NULL
+GROUP BY template_id, template_variant;

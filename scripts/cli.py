@@ -833,6 +833,158 @@ def cmd_dependencies(args):
     return 1
 
 
+def cmd_variants(args):
+    """View and manage template variants for A/B testing."""
+    db_path = get_db_for_args(args)
+    action = getattr(args, 'action', 'list')
+
+    if action == 'list':
+        # List all variants
+        try:
+            variants = db_execute(
+                """SELECT * FROM template_variants ORDER BY template_id, variant_name""",
+                db_path=db_path
+            )
+        except Exception:
+            variants = []
+
+        print()
+        print("TEMPLATE VARIANTS (A/B Testing)")
+        print("-" * 60)
+
+        if not variants:
+            print("\nNo variants defined.")
+            print("\nTo create a variant:")
+            print("  homunculus variants add <template_id> <variant_name> --patches '{...}'")
+            print()
+            return 0
+
+        current_template = None
+        for v in variants:
+            if v['template_id'] != current_template:
+                current_template = v['template_id']
+                print(f"\n  Template: {current_template}")
+            status = "enabled" if v['enabled'] else "disabled"
+            print(f"    - {v['variant_name']} (weight: {v['weight']}, {status})")
+            if v.get('variant_description'):
+                print(f"      {v['variant_description']}")
+
+        print()
+        return 0
+
+    elif action == 'results':
+        # Show A/B test results
+        try:
+            results = db_execute(
+                """SELECT template_id, template_variant,
+                          COUNT(*) as total,
+                          SUM(CASE WHEN status IN ('approved', 'installed') THEN 1 ELSE 0 END) as approved,
+                          SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
+                          ROUND(AVG(confidence), 3) as avg_conf
+                   FROM proposals
+                   WHERE template_variant IS NOT NULL
+                   GROUP BY template_id, template_variant
+                   ORDER BY template_id, template_variant""",
+                db_path=db_path
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+
+        print()
+        print("A/B TEST RESULTS")
+        print("-" * 60)
+
+        if not results:
+            print("\nNo A/B test data yet.")
+            print("Variants will be tracked once proposals are generated.")
+            print()
+            return 0
+
+        headers = ["TEMPLATE", "VARIANT", "TOTAL", "APPROVED", "REJECTED", "RATE", "AVG CONF"]
+        rows = []
+        for r in results:
+            total = r['total']
+            approved = r['approved'] or 0
+            rate = f"{(approved/total*100):.1f}%" if total > 0 else "-"
+            rows.append([
+                r['template_id'][:15],
+                r['template_variant'] or 'base',
+                str(total),
+                str(approved),
+                str(r['rejected'] or 0),
+                rate,
+                f"{r['avg_conf']:.2f}" if r['avg_conf'] else '-'
+            ])
+
+        print()
+        print(format_table(headers, rows))
+        print()
+        return 0
+
+    elif action == 'add':
+        template_id = getattr(args, 'template_id', None)
+        variant_name = getattr(args, 'variant_name', None)
+        patches = getattr(args, 'patches', '{}')
+        weight = getattr(args, 'weight', 1.0)
+        description = getattr(args, 'description', '')
+
+        if not template_id or not variant_name:
+            print("Error: template_id and variant_name required")
+            return 1
+
+        try:
+            # Validate patches JSON
+            json.loads(patches)
+        except json.JSONDecodeError:
+            print("Error: patches must be valid JSON")
+            return 1
+
+        variant_id = generate_id("var")
+        try:
+            with get_db_connection(db_path) as conn:
+                conn.execute(
+                    """INSERT INTO template_variants
+                       (id, template_id, variant_name, variant_description, weight, patches_json, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (variant_id, template_id, variant_name, description, weight, patches, get_timestamp())
+                )
+                conn.commit()
+            print(f"\nCreated variant: {variant_name} for template {template_id}")
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+
+        return 0
+
+    elif action == 'toggle':
+        variant_name = getattr(args, 'variant_name', None)
+        if not variant_name:
+            print("Error: variant_name required")
+            return 1
+
+        try:
+            with get_db_connection(db_path) as conn:
+                cursor = conn.execute(
+                    "UPDATE template_variants SET enabled = 1 - enabled WHERE variant_name = ?",
+                    (variant_name,)
+                )
+                conn.commit()
+                if cursor.rowcount > 0:
+                    print(f"\nToggled variant: {variant_name}")
+                else:
+                    print(f"\nVariant not found: {variant_name}")
+                    return 1
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+
+        return 0
+
+    print(f"Unknown action: {action}")
+    return 1
+
+
 def cmd_dismiss_gap(args):
     """Dismiss a gap permanently."""
     gap_id = args.gap_id
@@ -1057,6 +1209,19 @@ def main():
     meta_parser = subparsers.add_parser("meta-status", help="Show meta-evolution status")
     meta_parser.add_argument("--analyze", action="store_true", help="Run meta-analysis")
 
+    # variants (A/B testing)
+    variants_parser = subparsers.add_parser("variants", help="Manage template variants for A/B testing")
+    variants_parser.add_argument("action", nargs="?", default="list",
+                                  choices=["list", "results", "add", "toggle"],
+                                  help="Action: list, results, add, toggle")
+    variants_parser.add_argument("template_id", nargs="?", help="Template ID (for add)")
+    variants_parser.add_argument("variant_name", nargs="?", help="Variant name (for add/toggle)")
+    variants_parser.add_argument("--patches", default="{}",
+                                  help="JSON patches to apply to template (for add)")
+    variants_parser.add_argument("--weight", type=float, default=1.0,
+                                  help="Selection weight (higher = more likely)")
+    variants_parser.add_argument("--description", help="Variant description")
+
     args = parser.parse_args()
 
     # Default to status if no command
@@ -1082,6 +1247,7 @@ def main():
         "dependencies": cmd_dependencies,
         "dismiss-gap": cmd_dismiss_gap,
         "meta-status": cmd_meta_status,
+        "variants": cmd_variants,
     }
 
     handler = commands.get(args.command)
