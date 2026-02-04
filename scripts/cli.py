@@ -15,14 +15,70 @@ sys.path.insert(0, str(Path(__file__).parent))
 from utils import (
     HOMUNCULUS_ROOT, DB_PATH, OBSERVATIONS_PATH,
     get_db_connection, db_execute, format_table, load_config,
-    generate_id, get_timestamp
+    generate_id, get_timestamp, get_effective_db_path,
+    get_project_db_path, detect_project_root, ensure_project_db_initialized,
+    list_project_databases
 )
 from init_db import init_database, check_database
 
 
+def get_db_for_args(args) -> Path:
+    """Get the appropriate database path based on CLI arguments."""
+    scope = getattr(args, 'scope', None)
+    project_path = getattr(args, 'project', None)
+
+    if project_path:
+        return get_project_db_path(Path(project_path))
+
+    return get_effective_db_path(scope=scope, project_path=project_path)
+
+
 def cmd_init(args):
     """Initialize Homunculus."""
+    project_path = getattr(args, 'project', None)
+    auto_project = getattr(args, 'auto_project', False)
+
     print()
+
+    # Handle project-scoped initialization
+    if project_path or auto_project:
+        if auto_project:
+            project_path = detect_project_root()
+            if not project_path:
+                print("Could not detect project root.")
+                print("Use --project <path> to specify project directory.")
+                return 1
+
+        project_path = Path(project_path)
+        db_path = get_project_db_path(project_path)
+
+        print(f"Initializing project-scoped Homunculus...")
+        print(f"  Project: {project_path}")
+        print()
+
+        # Check if already initialized
+        db_info = check_database(db_path)
+        if db_info.get("exists") and not args.force:
+            print(f"Project database already exists at {db_path}")
+            print("Use --force to reinitialize")
+            return 1
+
+        # Initialize project database
+        if not ensure_project_db_initialized(project_path):
+            print("Failed to initialize project database")
+            return 1
+
+        print(f"Project database initialized at {db_path}")
+        print()
+        print("This project now has its own:")
+        print("  - Gap detection")
+        print("  - Proposals")
+        print("  - Capabilities")
+        print()
+        print("Use --scope project or --project <path> with commands to use project DB.")
+        return 0
+
+    # Global initialization
     print("Initializing Homunculus...")
     print()
 
@@ -47,24 +103,39 @@ def cmd_init(args):
     print("3. Use Claude normally - gaps will be detected automatically")
     print("4. Run '/homunculus proposals' to review suggestions")
     print()
+    print("For project-scoped databases, use:")
+    print("  homunculus init --auto-project   (auto-detect project)")
+    print("  homunculus init --project /path  (explicit path)")
+    print()
 
     return 0
 
 
 def cmd_status(args):
     """Show system status."""
+    # Determine which database to use
+    db_path = get_db_for_args(args)
+    scope = "project" if db_path != DB_PATH else "global"
+
     print()
     print("=" * 60)
     print("  HOMUNCULUS STATUS")
     print("=" * 60)
     print()
+    print(f"  Scope: {scope.upper()}")
+    if scope == "project":
+        print(f"  Database: {db_path}")
+    print()
 
     # Check database
-    db_info = check_database()
+    db_info = check_database(db_path)
     if not db_info.get("exists"):
         print("  Status: NOT INITIALIZED")
         print()
-        print("  Run '/homunculus init' to initialize")
+        if scope == "project":
+            print("  Run 'homunculus init --project <path>' to initialize")
+        else:
+            print("  Run '/homunculus init' to initialize")
         return 1
 
     if "error" in db_info:
@@ -94,7 +165,8 @@ def cmd_status(args):
 
     try:
         pending_gaps = db_execute(
-            "SELECT COUNT(*) as count FROM gaps WHERE status = 'pending'"
+            "SELECT COUNT(*) as count FROM gaps WHERE status = 'pending'",
+            db_path=db_path
         )
         print(f"  Pending: {pending_gaps[0]['count'] if pending_gaps else 0}")
     except Exception:
@@ -108,7 +180,8 @@ def cmd_status(args):
 
     try:
         pending_props = db_execute(
-            "SELECT COUNT(*) as count FROM proposals WHERE status = 'pending'"
+            "SELECT COUNT(*) as count FROM proposals WHERE status = 'pending'",
+            db_path=db_path
         )
         pending_count = pending_props[0]['count'] if pending_props else 0
         if pending_count > 0:
@@ -127,7 +200,8 @@ def cmd_status(args):
     if caps > 0:
         try:
             cap_types = db_execute(
-                "SELECT capability_type, COUNT(*) as count FROM capabilities WHERE status = 'active' GROUP BY capability_type"
+                "SELECT capability_type, COUNT(*) as count FROM capabilities WHERE status = 'active' GROUP BY capability_type",
+                db_path=db_path
             )
             for ct in cap_types:
                 print(f"    {ct['capability_type']}: {ct['count']}")
@@ -143,6 +217,8 @@ def cmd_status(args):
 
 def cmd_gaps(args):
     """List detected gaps."""
+    db_path = get_db_for_args(args)
+
     try:
         gaps = db_execute(
             """SELECT id, gap_type, domain, confidence, recommended_scope, status,
@@ -150,7 +226,8 @@ def cmd_gaps(args):
                FROM gaps
                WHERE status IN ('pending', 'synthesizing')
                ORDER BY confidence DESC
-               LIMIT 20"""
+               LIMIT 20""",
+            db_path=db_path
         )
     except Exception as e:
         print(f"Error: {e}")
@@ -190,12 +267,14 @@ def cmd_gaps(args):
 
 def cmd_gap(args):
     """Show details for a specific gap."""
+    db_path = get_db_for_args(args)
     gap_id = args.gap_id
 
     try:
         gaps = db_execute(
             "SELECT * FROM gaps WHERE id = ? OR id LIKE ?",
-            (gap_id, f"{gap_id}%")
+            (gap_id, f"{gap_id}%"),
+            db_path=db_path
         )
     except Exception as e:
         print(f"Error: {e}")
@@ -230,6 +309,8 @@ def cmd_gap(args):
 
 def cmd_proposals(args):
     """List pending proposals."""
+    db_path = get_db_for_args(args)
+
     try:
         proposals = db_execute(
             """SELECT p.id, p.capability_type, p.capability_name, p.confidence,
@@ -237,7 +318,8 @@ def cmd_proposals(args):
                FROM proposals p
                JOIN gaps g ON p.gap_id = g.id
                WHERE p.status = 'pending'
-               ORDER BY p.confidence DESC"""
+               ORDER BY p.confidence DESC""",
+            db_path=db_path
         )
     except Exception as e:
         print(f"Error: {e}")
@@ -270,6 +352,8 @@ def cmd_proposals(args):
 
 def cmd_capabilities(args):
     """List installed capabilities."""
+    db_path = get_db_for_args(args)
+
     try:
         caps = db_execute(
             """SELECT c.id, c.name, c.capability_type, c.scope, c.installed_at,
@@ -278,7 +362,8 @@ def cmd_capabilities(args):
                LEFT JOIN capability_usage u ON c.id = u.capability_id
                WHERE c.status = 'active'
                GROUP BY c.id
-               ORDER BY c.installed_at DESC"""
+               ORDER BY c.installed_at DESC""",
+            db_path=db_path
         )
     except Exception as e:
         print(f"Error: {e}")
@@ -684,17 +769,78 @@ def cmd_meta_status(args):
     return 0
 
 
+def cmd_projects(args):
+    """List project-scoped databases."""
+    print()
+    print("=" * 60)
+    print("PROJECT-SCOPED DATABASES")
+    print("=" * 60)
+    print()
+
+    project_dbs = list_project_databases()
+
+    if not project_dbs:
+        print("  No project databases found.")
+        print()
+        print("  To create a project database:")
+        print("    homunculus init --auto-project   (in a project directory)")
+        print("    homunculus init --project /path")
+        print()
+        return 0
+
+    print(f"  Found {len(project_dbs)} project database(s):")
+    print()
+
+    headers = ["PROJECT", "GAPS", "CAPS"]
+    rows = []
+    for pdb in project_dbs:
+        project_name = Path(pdb['project_path']).name
+        rows.append([
+            project_name[:30],
+            str(pdb['pending_gaps']),
+            str(pdb['capabilities'])
+        ])
+
+    print(format_table(headers, rows))
+    print()
+
+    # Show detail for each
+    for pdb in project_dbs:
+        print(f"  {pdb['project_path']}")
+        print(f"    Database: {pdb['db_path']}")
+        print(f"    Pending gaps: {pdb['pending_gaps']}")
+        print(f"    Active capabilities: {pdb['capabilities']}")
+        print()
+
+    print("  Use --project <path> with commands to operate on a specific project.")
+    print()
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Homunculus - Self-evolution system for Claude Code",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
+    # Global options for database scope
+    parser.add_argument("--scope", choices=["global", "project"],
+                        help="Use global or project-scoped database")
+    parser.add_argument("--project", type=Path,
+                        help="Path to project for project-scoped operations")
+
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # init
     init_parser = subparsers.add_parser("init", help="Initialize Homunculus")
     init_parser.add_argument("--force", action="store_true", help="Force reinitialization")
+    init_parser.add_argument("--project", type=Path, dest="project",
+                             help="Initialize project-scoped database at path")
+    init_parser.add_argument("--auto-project", action="store_true",
+                             help="Auto-detect project and initialize project database")
+
+    # projects
+    subparsers.add_parser("projects", help="List project-scoped databases")
 
     # status
     subparsers.add_parser("status", help="Show system status")
@@ -760,6 +906,7 @@ def main():
     commands = {
         "init": cmd_init,
         "status": cmd_status,
+        "projects": cmd_projects,
         "gaps": cmd_gaps,
         "gap": cmd_gap,
         "proposals": cmd_proposals,
