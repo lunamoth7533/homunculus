@@ -446,13 +446,15 @@ def cmd_synthesize(args):
     """Manually trigger synthesis."""
     from synthesizer import run_synthesis, CapabilitySynthesizer
 
+    db_path = get_db_for_args(args)
+
     print()
     print("=" * 60)
     print("CAPABILITY SYNTHESIS")
     print("=" * 60)
 
     # Check for templates
-    synthesizer = CapabilitySynthesizer()
+    synthesizer = CapabilitySynthesizer(db_path=db_path)
     if not synthesizer.templates:
         print("\nNo synthesis templates found.")
         print("Templates should be in: ~/homunculus/meta/synthesis-templates/")
@@ -467,7 +469,7 @@ def cmd_synthesize(args):
     limit = getattr(args, 'limit', 5)
 
     print(f"\nSynthesizing proposals (limit: {limit})...")
-    proposals = run_synthesis(gap_id=gap_id, limit=limit)
+    proposals = run_synthesis(gap_id=gap_id, limit=limit, db_path=db_path)
 
     if not proposals:
         print("\nNo proposals generated.")
@@ -594,6 +596,18 @@ def cmd_approve(args):
         print(f"  Files created:")
         for f in result.files_created:
             print(f"    - {f}")
+
+        # Display security warnings if any
+        if result.security_warnings:
+            print()
+            print("=" * 60)
+            print("SECURITY WARNINGS")
+            print("=" * 60)
+            for warning in result.security_warnings:
+                print(f"  ! {warning}")
+            print()
+            print("Review installed files carefully before use.")
+
         print()
         print(f"To rollback: homunculus rollback {proposal['capability_name']}")
     else:

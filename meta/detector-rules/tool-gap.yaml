@@ -6,7 +6,7 @@ priority: high
 enabled: true
 
 triggers:
-  - condition: "raw_json contains 'can''t'"
+  - condition: 'raw_json contains "can''t"'
     extract:
       desired_capability: "regex: (?:can't|cannot|unable to|don't have|no way to|not able to) ([^.]+)"
     confidence_boost: 0.3
@@ -27,7 +27,7 @@ triggers:
   - condition: "raw_json contains 'missing capability'"
     confidence_boost: 0.35
 
-  - condition: "raw_json contains 'I don''t have access'"
+  - condition: 'raw_json contains "I don''t have access"'
     confidence_boost: 0.35
 
 min_confidence: 0.3

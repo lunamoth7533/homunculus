@@ -6,10 +6,10 @@ priority: medium
 enabled: true
 
 triggers:
-  - condition: "raw_json contains 'can''t verify'"
+  - condition: 'raw_json contains "can''t verify"'
     confidence_boost: 0.35
 
-  - condition: "raw_json contains 'can''t test'"
+  - condition: 'raw_json contains "can''t test"'
     confidence_boost: 0.35
 
   - condition: "raw_json contains 'no way to check'"

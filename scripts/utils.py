@@ -5,6 +5,7 @@ Homunculus core utilities.
 
 import os
 import json
+import logging
 import sqlite3
 import uuid
 import hashlib
@@ -12,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 from contextlib import contextmanager
+
+logger = logging.getLogger(__name__)
 
 # Paths - use CLAUDE_PLUGIN_ROOT if available (for plugin mode), otherwise ~/homunculus
 HOMUNCULUS_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path.home() / "homunculus"))
@@ -45,16 +48,24 @@ def load_config() -> Dict[str, Any]:
         return yaml.safe_load(CONFIG_PATH.read_text()) or {}
     except ImportError:
         # Fallback to basic parsing if yaml not available
+        logger.debug("PyYAML not available, config loading limited")
         return {}
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to load config from {CONFIG_PATH}: {e}")
         return {}
 
 
 @contextmanager
 def get_db_connection(db_path: Path = DB_PATH):
-    """Get a database connection context manager."""
-    conn = sqlite3.connect(db_path)
+    """Get a database connection context manager with integrity features enabled."""
+    conn = sqlite3.connect(db_path, timeout=5.0)
     conn.row_factory = sqlite3.Row
+    # Enable foreign key enforcement
+    conn.execute("PRAGMA foreign_keys = ON")
+    # Use WAL mode for better concurrency
+    conn.execute("PRAGMA journal_mode = WAL")
+    # Set busy timeout to 5 seconds
+    conn.execute("PRAGMA busy_timeout = 5000")
     try:
         yield conn
     finally:
@@ -95,10 +106,17 @@ def read_jsonl(file_path: Path) -> List[Dict]:
 
 
 def append_jsonl(file_path: Path, data: Dict) -> None:
-    """Append a dict to a JSONL file."""
+    """Append a dict to a JSONL file with file locking for concurrent safety."""
+    import fcntl
+
     file_path.parent.mkdir(parents=True, exist_ok=True)
     with open(file_path, 'a') as f:
-        f.write(json.dumps(data) + '\n')
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            f.write(json.dumps(data) + '\n')
+            f.flush()
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def _simple_yaml_parse(text: str) -> Dict:
@@ -223,9 +241,11 @@ def load_yaml_file(file_path: Path) -> Dict:
         # Fallback to simple parser
         try:
             return _simple_yaml_parse(text)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to parse YAML file {file_path} with fallback parser: {e}")
             return {}
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to parse YAML file {file_path}: {e}")
         return {}
 
 

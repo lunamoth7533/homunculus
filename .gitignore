@@ -41,6 +41,10 @@ data/*.db-journal
 # Observations (runtime data)
 observations/*.jsonl
 
+# Runtime logs
+logs/*.log
+*.log
+
 # Evolved capabilities (generated content)
 evolved/skills/*.md
 evolved/hooks/*.yaml

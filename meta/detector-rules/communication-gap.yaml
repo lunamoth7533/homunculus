@@ -14,7 +14,7 @@ triggers:
   - condition: "raw_json contains 'misunderstood'"
     confidence_boost: 0.3
 
-  - condition: "raw_json contains 'that''s not what'"
+  - condition: 'raw_json contains "that''s not what"'
     confidence_boost: 0.3
 
   - condition: "raw_json contains 'let me clarify'"

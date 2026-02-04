@@ -6,7 +6,7 @@ priority: low
 enabled: true
 
 triggers:
-  - condition: "raw_json contains 'didn''t know'"
+  - condition: 'raw_json contains "didn''t know"'
     extract:
       desired_capability: "regex: didn't know (?:about )?([^.]+)"
     confidence_boost: 0.3
@@ -14,7 +14,7 @@ triggers:
   - condition: "raw_json contains 'just found out'"
     confidence_boost: 0.25
 
-  - condition: "raw_json contains 'there''s a'"
+  - condition: 'raw_json contains "there''s a"'
     confidence_boost: 0.15
 
   - condition: "raw_json contains 'discovered'"

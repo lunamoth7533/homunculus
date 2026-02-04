@@ -103,6 +103,7 @@ class InstallationResult:
     message: str
     files_created: List[str]
     rollback_info: Optional[Dict[str, Any]] = None
+    security_warnings: Optional[List[str]] = None
 
 
 def get_proposal(proposal_id: str, db_path: Union[str, Path] = None) -> Optional[Dict[str, Any]]:
@@ -268,7 +269,7 @@ def install_proposal(proposal_id: str, db_path: Union[str, Path] = None) -> Inst
 
             # Update proposal status
             conn.execute(
-                "UPDATE proposals SET status = 'approved', reviewed_at = ?, reviewer_action = 'approve' WHERE id = ?",
+                "UPDATE proposals SET status = 'installed', reviewed_at = ?, reviewer_action = 'approve' WHERE id = ?",
                 (timestamp, proposal['id'])
             )
 
@@ -295,7 +296,8 @@ def install_proposal(proposal_id: str, db_path: Union[str, Path] = None) -> Inst
         capability_id=capability_id,
         message=f"Installed capability: {proposal['capability_name']}",
         files_created=created_files,
-        rollback_info=rollback_info
+        rollback_info=rollback_info,
+        security_warnings=content_warnings if content_warnings else None
     )
 
 

@@ -6,18 +6,18 @@ priority: medium
 enabled: true
 
 triggers:
-  - condition: "raw_json contains 'doesn''t connect'"
+  - condition: 'raw_json contains "doesn''t connect"'
     extract:
       desired_capability: "regex: (.+) doesn't connect"
     confidence_boost: 0.3
 
-  - condition: "raw_json contains 'can''t sync'"
+  - condition: 'raw_json contains "can''t sync"'
     confidence_boost: 0.25
 
   - condition: "raw_json contains 'no integration'"
     confidence_boost: 0.3
 
-  - condition: "raw_json contains 'doesn''t talk to'"
+  - condition: 'raw_json contains "doesn''t talk to"'
     confidence_boost: 0.25
 
   - condition: "raw_json contains 'incompatible'"
