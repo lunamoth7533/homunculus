@@ -1,6 +1,6 @@
 {
   "name": "homunculus",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Self-evolution system for Claude Code - automatic gap detection and capability synthesis with human-in-the-loop approval",
   "author": {
     "name": "lunamoth7533",
@@ -19,6 +19,5 @@
     "hooks",
     "agents"
   ],
-  "hooks": "./hooks/hooks.json",
   "skills": "./skills/"
 }
