@@ -326,25 +326,109 @@ class GapDetector:
                 unique[key] = gap
         return list(unique.values())
 
+    def _calculate_similarity(self, text1: str, text2: str) -> float:
+        """Calculate similarity between two texts (0-1)."""
+        if not text1 or not text2:
+            return 0.0
+
+        # Normalize texts
+        t1 = text1.lower().strip()
+        t2 = text2.lower().strip()
+
+        if t1 == t2:
+            return 1.0
+
+        # Word-based similarity
+        words1 = set(t1.split())
+        words2 = set(t2.split())
+
+        if not words1 or not words2:
+            return 0.0
+
+        intersection = words1 & words2
+        union = words1 | words2
+
+        return len(intersection) / len(union)
+
+    def _find_similar_gap(self, gap: DetectedGap, threshold: float = 0.7):
+        """
+        Find a similar existing gap for deduplication.
+        Returns (gap_id, similarity) or (None, 0).
+        """
+        try:
+            # Get all pending or synthesizing gaps of same type
+            existing_gaps = db_execute(
+                """SELECT id, desired_capability, domain, confidence, evidence_summary
+                   FROM gaps
+                   WHERE gap_type = ? AND status IN ('pending', 'synthesizing')""",
+                (gap.gap_type,)
+            )
+
+            best_match = None
+            best_similarity = 0.0
+
+            for existing in existing_gaps:
+                # Calculate similarity
+                sim = self._calculate_similarity(
+                    gap.desired_capability,
+                    existing['desired_capability']
+                )
+
+                # Boost similarity if domains match
+                if gap.domain and existing['domain'] and gap.domain == existing['domain']:
+                    sim = min(1.0, sim + 0.1)
+
+                if sim > best_similarity and sim >= threshold:
+                    best_match = existing['id']
+                    best_similarity = sim
+
+            return best_match, best_similarity
+
+        except Exception as e:
+            print(f"Error finding similar gap: {e}")
+            return None, 0.0
+
     def save_gap(self, gap: DetectedGap) -> bool:
-        """Save a detected gap to the database."""
+        """Save a detected gap to the database with cross-session deduplication."""
         try:
             with get_db_connection() as conn:
-                # Check if similar gap already exists
-                existing = conn.execute(
-                    """SELECT id FROM gaps
-                       WHERE gap_type = ? AND desired_capability = ? AND status = 'pending'""",
-                    (gap.gap_type, gap.desired_capability)
-                ).fetchone()
+                # Check for similar existing gap (cross-session deduplication)
+                similar_id, similarity = self._find_similar_gap(gap)
 
-                if existing:
-                    # Update confidence if higher
+                if similar_id:
+                    # Merge with existing gap
+                    # Update confidence (take max), append evidence
+                    existing = conn.execute(
+                        "SELECT evidence_summary, confidence FROM gaps WHERE id = ?",
+                        (similar_id,)
+                    ).fetchone()
+
+                    new_confidence = max(gap.confidence, existing[1] if existing else 0)
+
+                    # Combine evidence summaries
+                    old_evidence = existing[0] if existing and existing[0] else ""
+                    if old_evidence and gap.evidence_summary:
+                        combined_evidence = f"{old_evidence}; {gap.evidence_summary}"[:500]
+                    else:
+                        combined_evidence = gap.evidence_summary or old_evidence
+
                     conn.execute(
-                        "UPDATE gaps SET confidence = MAX(confidence, ?), updated_at = ? WHERE id = ?",
-                        (gap.confidence, get_timestamp(), existing[0])
+                        """UPDATE gaps
+                           SET confidence = ?, evidence_summary = ?, updated_at = ?
+                           WHERE id = ?""",
+                        (new_confidence, combined_evidence, get_timestamp(), similar_id)
                     )
+
+                    # Link new observations to existing gap
+                    for obs_id in gap.observation_ids:
+                        if obs_id:
+                            conn.execute("""
+                                INSERT OR IGNORE INTO gap_observations (gap_id, observation_id)
+                                VALUES (?, ?)
+                            """, (similar_id, obs_id))
+
                     conn.commit()
-                    return False  # Not a new gap
+                    return False  # Not a new gap (merged with existing)
 
                 # Insert new gap
                 conn.execute("""
