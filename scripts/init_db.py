@@ -9,7 +9,10 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).parent))
-from utils import HOMUNCULUS_ROOT, DB_PATH
+from utils import (
+    HOMUNCULUS_ROOT, DB_PATH, get_project_db_path,
+    ensure_project_db_initialized, detect_project_root
+)
 
 SCHEMA_PATH = HOMUNCULUS_ROOT / "scripts" / "schema.sql"
 
@@ -97,6 +100,19 @@ def reset_database(db_path: Path = DB_PATH) -> bool:
         return False
 
 
+def init_project_database(project_path: Path) -> bool:
+    """Initialize a project-scoped database."""
+    try:
+        success = ensure_project_db_initialized(project_path)
+        if success:
+            db_path = get_project_db_path(project_path)
+            print(f"Project database initialized at {db_path}")
+        return success
+    except Exception as e:
+        print(f"Error initializing project database: {e}", file=sys.stderr)
+        return False
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -104,11 +120,56 @@ if __name__ == "__main__":
     parser.add_argument("--reset", action="store_true", help="Reset existing database")
     parser.add_argument("--check", action="store_true", help="Check database status")
     parser.add_argument("--db", type=Path, default=DB_PATH, help="Database path")
+    parser.add_argument("--project", type=Path, help="Initialize project-scoped database at path")
+    parser.add_argument("--auto-project", action="store_true",
+                        help="Auto-detect and initialize project database from current directory")
 
     args = parser.parse_args()
 
+    # Handle project database initialization
+    if args.project:
+        if args.check:
+            db_path = get_project_db_path(args.project)
+            info = check_database(db_path)
+            info['scope'] = 'project'
+            info['project_path'] = str(args.project)
+            import json
+            print(json.dumps(info, indent=2))
+            sys.exit(0)
+
+        if args.reset and get_project_db_path(args.project).exists():
+            get_project_db_path(args.project).unlink()
+            print(f"Deleted existing project database")
+
+        success = init_project_database(args.project)
+        sys.exit(0 if success else 1)
+
+    if args.auto_project:
+        project_root = detect_project_root()
+        if not project_root:
+            print("Could not detect project root. Use --project <path> instead.", file=sys.stderr)
+            sys.exit(1)
+
+        if args.check:
+            db_path = get_project_db_path(project_root)
+            info = check_database(db_path)
+            info['scope'] = 'project'
+            info['project_path'] = str(project_root)
+            import json
+            print(json.dumps(info, indent=2))
+            sys.exit(0)
+
+        if args.reset and get_project_db_path(project_root).exists():
+            get_project_db_path(project_root).unlink()
+            print(f"Deleted existing project database at {project_root}")
+
+        success = init_project_database(project_root)
+        sys.exit(0 if success else 1)
+
+    # Default global database handling
     if args.check:
         info = check_database(args.db)
+        info['scope'] = 'global'
         import json
         print(json.dumps(info, indent=2))
         sys.exit(0)

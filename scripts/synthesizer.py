@@ -2,12 +2,18 @@
 """
 Capability synthesis engine for Homunculus.
 Generates proposals from detected gaps.
+
+Supports two modes:
+1. Template-based (default): Uses YAML templates for deterministic generation
+2. LLM-enhanced (optional): Uses Claude API if ANTHROPIC_API_KEY is set
 """
 
 import json
+import os
 import re
+import random
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -16,9 +22,90 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import (
     HOMUNCULUS_ROOT, generate_id, get_timestamp, db_execute,
-    load_yaml_file, get_db_connection
+    load_yaml_file, get_db_connection, load_config
 )
 from gap_types import get_gap_info, get_capability_types
+
+
+def get_llm_client() -> Optional[Any]:
+    """
+    Get Claude API client if available.
+    Returns None if API key not configured or anthropic package not installed.
+    """
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
+        return None
+
+    try:
+        import anthropic
+        return anthropic.Anthropic(api_key=api_key)
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+
+def llm_enhance_content(
+    template_content: str,
+    gap: Dict[str, Any],
+    capability_type: str,
+    synthesis_prompt: str
+) -> Optional[str]:
+    """
+    Use Claude to enhance template-generated content.
+    Returns enhanced content or None if LLM not available/fails.
+    """
+    client = get_llm_client()
+    if not client:
+        return None
+
+    config = load_config()
+    model = config.get('synthesis', {}).get('synthesis_model', 'claude-sonnet-4-20250514')
+
+    # Map config model names to API model IDs
+    model_map = {
+        'sonnet': 'claude-sonnet-4-20250514',
+        'haiku': 'claude-3-5-haiku-20241022',
+        'opus': 'claude-opus-4-20250514',
+    }
+    model_id = model_map.get(model, model)
+
+    prompt = f"""You are enhancing a Claude Code capability template.
+
+CONTEXT:
+- Gap Type: {gap.get('gap_type', 'unknown')}
+- Domain: {gap.get('domain', 'general')}
+- Desired Capability: {gap.get('desired_capability', 'unknown')}
+- Evidence: {gap.get('evidence_summary', 'none')}
+- Capability Type: {capability_type}
+
+ORIGINAL TEMPLATE OUTPUT:
+```
+{template_content}
+```
+
+SYNTHESIS INSTRUCTIONS:
+{synthesis_prompt}
+
+TASK:
+Improve the template output by:
+1. Making instructions more specific and actionable
+2. Adding concrete examples relevant to the gap
+3. Filling in TODO sections with actual implementation guidance
+4. Ensuring the capability addresses the detected gap
+
+Keep the same format (markdown with YAML frontmatter). Output only the improved content, no explanation."""
+
+    try:
+        response = client.messages.create(
+            model=model_id,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text
+    except Exception as e:
+        print(f"LLM enhancement failed: {e}")
+        return None
 
 
 @dataclass
@@ -46,6 +133,34 @@ class SynthesisTemplate:
 
 
 @dataclass
+class TemplateVariant:
+    """A variant of a synthesis template for A/B testing."""
+    id: str
+    template_id: str
+    variant_name: str
+    variant_description: str
+    weight: float
+    patches: Dict[str, Any]  # JSON patches to apply to base template
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TemplateVariant':
+        patches = data.get('patches_json')
+        if isinstance(patches, str):
+            try:
+                patches = json.loads(patches)
+            except json.JSONDecodeError:
+                patches = {}
+        return cls(
+            id=data.get('id', ''),
+            template_id=data.get('template_id', ''),
+            variant_name=data.get('variant_name', 'default'),
+            variant_description=data.get('variant_description', ''),
+            weight=data.get('weight', 1.0),
+            patches=patches or {}
+        )
+
+
+@dataclass
 class Proposal:
     """A synthesized capability proposal."""
     id: str
@@ -59,6 +174,7 @@ class Proposal:
     reasoning: str
     template_id: str
     template_version: int
+    template_variant: Optional[str]  # For A/B testing
     files: List[Dict[str, str]]
     rollback_instructions: str
     project_path: Optional[str] = None
@@ -69,8 +185,10 @@ class CapabilitySynthesizer:
 
     def __init__(self):
         self.templates: Dict[str, SynthesisTemplate] = {}
+        self.variants: Dict[str, List[TemplateVariant]] = {}  # template_id -> variants
         self.templates_dir = HOMUNCULUS_ROOT / "meta" / "synthesis-templates"
         self._load_templates()
+        self._load_variants()
 
     def _load_templates(self):
         """Load all synthesis templates."""
@@ -85,6 +203,64 @@ class CapabilitySynthesizer:
                     self.templates[template.output_type] = template
             except Exception as e:
                 print(f"Warning: Failed to load template {template_file}: {e}")
+
+    def _load_variants(self):
+        """Load template variants from database for A/B testing."""
+        try:
+            rows = db_execute(
+                """SELECT * FROM template_variants WHERE enabled = 1"""
+            )
+            for row in rows:
+                variant = TemplateVariant.from_dict(row)
+                if variant.template_id not in self.variants:
+                    self.variants[variant.template_id] = []
+                self.variants[variant.template_id].append(variant)
+        except Exception:
+            # Table may not exist in older databases
+            pass
+
+    def _select_variant(self, template_id: str) -> Optional[TemplateVariant]:
+        """
+        Select a variant for A/B testing using weighted random selection.
+        Returns None if no variants exist (use base template).
+        """
+        variants = self.variants.get(template_id, [])
+        if not variants:
+            return None
+
+        # Weighted random selection
+        total_weight = sum(v.weight for v in variants)
+        if total_weight <= 0:
+            return None
+
+        r = random.random() * total_weight
+        cumulative = 0
+        for variant in variants:
+            cumulative += variant.weight
+            if r <= cumulative:
+                return variant
+
+        return variants[-1] if variants else None
+
+    def _apply_variant_patches(
+        self,
+        template: SynthesisTemplate,
+        variant: TemplateVariant
+    ) -> SynthesisTemplate:
+        """Apply variant patches to create a modified template."""
+        # Create a copy of the template with variant modifications
+        import copy
+        modified = copy.copy(template)
+
+        patches = variant.patches
+        if 'synthesis_prompt' in patches:
+            modified.synthesis_prompt = patches['synthesis_prompt']
+        if 'structure' in patches:
+            modified.structure = patches['structure']
+        if 'output_path' in patches:
+            modified.output_path = patches['output_path']
+
+        return modified
 
     def select_template(self, gap_type: str) -> Optional[SynthesisTemplate]:
         """Select the best template for a gap type."""
@@ -107,11 +283,22 @@ class CapabilitySynthesizer:
     def synthesize_from_gap(self, gap: Dict[str, Any]) -> Optional[Proposal]:
         """Synthesize a proposal from a gap."""
         gap_type = gap.get('gap_type', '')
-        template = self.select_template(gap_type)
+        base_template = self.select_template(gap_type)
 
-        if not template:
+        if not base_template:
             print(f"No template found for gap type: {gap_type}")
             return None
+
+        # Check for A/B testing variant
+        variant = self._select_variant(base_template.id)
+        variant_name = None
+
+        if variant:
+            # Apply variant patches to template
+            template = self._apply_variant_patches(base_template, variant)
+            variant_name = variant.variant_name
+        else:
+            template = base_template
 
         # Generate capability name from desired capability
         name = self._generate_name(gap.get('desired_capability', ''), gap.get('domain', ''))
@@ -131,8 +318,9 @@ class CapabilitySynthesizer:
             scope=gap.get('recommended_scope', 'global'),
             confidence=gap.get('confidence', 0.5),
             reasoning=f"Generated to address: {gap.get('desired_capability', '')}",
-            template_id=template.id,
-            template_version=template.version,
+            template_id=base_template.id,  # Use base template ID for tracking
+            template_version=base_template.version,
+            template_variant=variant_name,  # A/B testing variant
             files=[{
                 "path": template.output_path.format(slug=slug),
                 "content": content,
@@ -184,22 +372,40 @@ class CapabilitySynthesizer:
 
     def _generate_content(self, template: SynthesisTemplate, gap: Dict[str, Any],
                           name: str, slug: str) -> str:
-        """Generate the capability file content."""
+        """
+        Generate the capability file content.
+
+        First generates template-based content, then optionally enhances
+        with LLM if ANTHROPIC_API_KEY is available.
+        """
         timestamp = get_timestamp()
 
-        # For now, generate a structured template without LLM
-        # This can be enhanced later to use Claude for generation
-
+        # Step 1: Generate template-based content
         if template.output_type == 'skill':
-            return self._generate_skill_content(gap, name, slug, timestamp)
+            content = self._generate_skill_content(gap, name, slug, timestamp)
         elif template.output_type == 'hook':
-            return self._generate_hook_content(gap, name, slug, timestamp)
+            content = self._generate_hook_content(gap, name, slug, timestamp)
         elif template.output_type == 'agent':
-            return self._generate_agent_content(gap, name, slug, timestamp)
+            content = self._generate_agent_content(gap, name, slug, timestamp)
         elif template.output_type == 'command':
-            return self._generate_command_content(gap, name, slug, timestamp)
+            content = self._generate_command_content(gap, name, slug, timestamp)
+        elif template.output_type == 'mcp_server':
+            content = self._generate_mcp_server_content(gap, name, slug, timestamp)
         else:
-            return self._generate_skill_content(gap, name, slug, timestamp)
+            content = self._generate_skill_content(gap, name, slug, timestamp)
+
+        # Step 2: Optionally enhance with LLM (if API key available)
+        if template.synthesis_prompt and get_llm_client():
+            enhanced = llm_enhance_content(
+                content,
+                gap,
+                template.output_type,
+                template.synthesis_prompt
+            )
+            if enhanced:
+                return enhanced
+
+        return content
 
     def _generate_skill_content(self, gap: Dict, name: str, slug: str, timestamp: str) -> str:
         """Generate skill markdown content."""
@@ -401,6 +607,159 @@ When invoked:
 *Generated by Homunculus on {timestamp}*
 '''
 
+    def _generate_mcp_server_content(self, gap: Dict, name: str, slug: str, timestamp: str) -> str:
+        """Generate MCP server content as a README with embedded code."""
+        desired = gap.get('desired_capability', 'Unknown')
+        domain = gap.get('domain', 'general')
+
+        # Generate a tool name from the capability
+        tool_name = slug.replace('-', '_')
+
+        return f'''# {name.replace('-', ' ').title()} MCP Server
+
+> Generated by Homunculus on {timestamp}
+
+## Purpose
+
+{desired}
+
+## Quick Setup
+
+1. Create the server directory and files:
+
+```bash
+mkdir -p ~/homunculus/evolved/mcp-servers/{slug}
+cd ~/homunculus/evolved/mcp-servers/{slug}
+```
+
+2. Create `package.json`:
+
+```json
+{{
+  "name": "{slug}-mcp-server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {{
+    "start": "npx tsx index.ts"
+  }},
+  "dependencies": {{
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }},
+  "devDependencies": {{
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }}
+}}
+```
+
+3. Create `index.ts`:
+
+```typescript
+import {{ Server }} from "@modelcontextprotocol/sdk/server/index.js";
+import {{ StdioServerTransport }} from "@modelcontextprotocol/sdk/server/stdio.js";
+import {{
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+}} from "@modelcontextprotocol/sdk/types.js";
+
+const server = new Server(
+  {{ name: "{slug}", version: "1.0.0" }},
+  {{ capabilities: {{ tools: {{}} }} }}
+);
+
+// Define available tools
+server.setRequestHandler(ListToolsRequestSchema, async () => ({{
+  tools: [
+    {{
+      name: "{tool_name}",
+      description: "{desired[:100].replace('"', '\\"')}",
+      inputSchema: {{
+        type: "object",
+        properties: {{
+          input: {{
+            type: "string",
+            description: "Input for the {domain} operation"
+          }}
+        }},
+        required: ["input"]
+      }}
+    }}
+  ]
+}}));
+
+// Handle tool calls
+server.setRequestHandler(CallToolRequestSchema, async (request) => {{
+  const {{ name, arguments: args }} = request.params;
+
+  if (name === "{tool_name}") {{
+    // TODO: Implement the actual functionality
+    const input = args?.input as string || "";
+
+    try {{
+      // Placeholder implementation
+      const result = `Processed: ${{input}}`;
+
+      return {{
+        content: [{{ type: "text", text: result }}]
+      }};
+    }} catch (error) {{
+      return {{
+        content: [{{ type: "text", text: `Error: ${{error}}` }}],
+        isError: true
+      }};
+    }}
+  }}
+
+  return {{
+    content: [{{ type: "text", text: `Unknown tool: ${{name}}` }}],
+    isError: true
+  }};
+}});
+
+// Start the server
+const transport = new StdioServerTransport();
+server.connect(transport);
+console.error("{slug} MCP server started");
+```
+
+4. Install dependencies and test:
+
+```bash
+npm install
+npm start
+```
+
+## Configure Claude Code
+
+Add to `~/.claude/settings.json`:
+
+```json
+{{
+  "mcpServers": {{
+    "{slug}": {{
+      "command": "npx",
+      "args": ["tsx", "~/homunculus/evolved/mcp-servers/{slug}/index.ts"]
+    }}
+  }}
+}}
+```
+
+## Evolved From
+
+- **Gap ID**: {gap.get('id', 'unknown')}
+- **Gap Type**: {gap.get('gap_type', 'unknown')}
+- **Domain**: {domain}
+- **Created**: {timestamp}
+
+## TODO
+
+- [ ] Implement actual tool functionality
+- [ ] Add input validation
+- [ ] Add error handling for edge cases
+- [ ] Add additional tools if needed
+'''
+
     def save_proposal(self, proposal: Proposal) -> bool:
         """Save a proposal to the database."""
         try:
@@ -409,9 +768,9 @@ When invoked:
                     INSERT INTO proposals (
                         id, created_at, gap_id, capability_type, capability_name,
                         capability_summary, scope, project_path, confidence, reasoning,
-                        template_id, template_version, synthesis_model, status,
+                        template_id, template_version, template_variant, synthesis_model, status,
                         files_json, rollback_instructions
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
                 """, (
                     proposal.id,
                     get_timestamp(),
@@ -425,6 +784,7 @@ When invoked:
                     proposal.reasoning,
                     proposal.template_id,
                     proposal.template_version,
+                    proposal.template_variant,  # A/B testing variant
                     "template-based",  # synthesis_model
                     json.dumps(proposal.files),
                     proposal.rollback_instructions

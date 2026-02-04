@@ -19,6 +19,10 @@ DB_PATH = HOMUNCULUS_ROOT / "homunculus.db"
 CONFIG_PATH = HOMUNCULUS_ROOT / "config.yaml"
 OBSERVATIONS_PATH = HOMUNCULUS_ROOT / "observations" / "current.jsonl"
 
+# Project database directory name
+PROJECT_DB_DIR = ".homunculus"
+PROJECT_DB_NAME = "homunculus.db"
+
 
 def generate_id(prefix: str = "id") -> str:
     """Generate a unique ID with prefix."""
@@ -275,6 +279,187 @@ def truncate_string(s: str, max_len: int = 50) -> str:
     if len(s) <= max_len:
         return s
     return s[:max_len-3] + "..."
+
+
+# =============================================================================
+# Project-scoped database support
+# =============================================================================
+
+def get_project_db_path(project_path: str | Path) -> Path:
+    """
+    Get the database path for a specific project.
+    Project databases are stored in .homunculus/homunculus.db within the project.
+    """
+    project = Path(project_path)
+    return project / PROJECT_DB_DIR / PROJECT_DB_NAME
+
+
+def detect_project_root(start_path: str | Path = None) -> Optional[Path]:
+    """
+    Detect the project root by looking for common markers.
+    Walks up from start_path looking for .git, package.json, etc.
+    """
+    if start_path is None:
+        start_path = Path.cwd()
+
+    current = Path(start_path).resolve()
+    markers = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', '.homunculus']
+
+    while current != current.parent:
+        for marker in markers:
+            if (current / marker).exists():
+                return current
+        current = current.parent
+
+    return None
+
+
+def get_effective_db_path(
+    scope: str = None,
+    project_path: str | Path = None,
+    auto_detect: bool = True
+) -> Path:
+    """
+    Get the effective database path based on scope and config.
+
+    Args:
+        scope: 'global', 'project', or None to use config default
+        project_path: Explicit project path (required if scope='project' and no auto-detect)
+        auto_detect: Whether to auto-detect project root if not specified
+
+    Returns:
+        Path to the appropriate database
+    """
+    # Load config to get defaults
+    config = load_config()
+    scoping_config = config.get('scoping', {})
+
+    # Determine effective scope
+    if scope is None:
+        scope = scoping_config.get('default_scope', 'global')
+
+    if scope == 'global':
+        return DB_PATH
+
+    if scope == 'project':
+        # Determine project path
+        if project_path:
+            project = Path(project_path)
+        elif auto_detect and scoping_config.get('project_detection', 'auto') == 'auto':
+            project = detect_project_root()
+        else:
+            project = None
+
+        if project:
+            return get_project_db_path(project)
+
+    # Fallback to global
+    return DB_PATH
+
+
+def ensure_project_db_initialized(project_path: str | Path) -> bool:
+    """
+    Ensure a project database exists and is initialized.
+    Creates the .homunculus directory and database if needed.
+
+    Returns True if database is ready, False on error.
+    """
+    project = Path(project_path)
+    db_dir = project / PROJECT_DB_DIR
+    db_path = db_dir / PROJECT_DB_NAME
+
+    # Create directory if needed
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    # Add .gitignore to keep project DB private
+    gitignore_path = db_dir / ".gitignore"
+    if not gitignore_path.exists():
+        gitignore_path.write_text("# Homunculus project database\n*.db\n*.db-journal\n")
+
+    # Check if DB already exists and is valid
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.execute("SELECT value FROM metadata WHERE key = 'schema_version'")
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                return True  # DB exists and has schema
+        except sqlite3.Error:
+            pass  # DB exists but may be corrupted, reinitialize
+
+    # Initialize the database
+    schema_path = HOMUNCULUS_ROOT / "scripts" / "schema.sql"
+    if not schema_path.exists():
+        return False
+
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.executescript(schema_path.read_text())
+
+        # Mark as project-scoped
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES (?, ?, ?)",
+            ("initialized_at", now, now)
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES (?, ?, ?)",
+            ("scope", "project", now)
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES (?, ?, ?)",
+            ("project_path", str(project), now)
+        )
+
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def list_project_databases() -> List[Dict[str, Any]]:
+    """
+    List all known project databases.
+    Checks recent project paths from session history.
+    """
+    project_dbs = []
+
+    try:
+        # Get unique project paths from sessions
+        rows = db_execute(
+            """SELECT DISTINCT project_path FROM sessions
+               WHERE project_path IS NOT NULL AND project_path != ''
+               ORDER BY started_at DESC LIMIT 50"""
+        )
+
+        for row in rows:
+            project_path = Path(row['project_path'])
+            db_path = get_project_db_path(project_path)
+
+            if db_path.exists():
+                try:
+                    with get_db_connection(db_path) as conn:
+                        # Get some stats
+                        cursor = conn.execute("SELECT COUNT(*) FROM gaps WHERE status = 'pending'")
+                        pending_gaps = cursor.fetchone()[0]
+                        cursor = conn.execute("SELECT COUNT(*) FROM capabilities WHERE status = 'active'")
+                        capabilities = cursor.fetchone()[0]
+
+                    project_dbs.append({
+                        'project_path': str(project_path),
+                        'db_path': str(db_path),
+                        'pending_gaps': pending_gaps,
+                        'capabilities': capabilities
+                    })
+                except sqlite3.Error:
+                    pass
+    except Exception:
+        pass
+
+    return project_dbs
 
 
 class HomunculusError(Exception):

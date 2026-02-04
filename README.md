@@ -33,38 +33,17 @@ cd ~/homunculus
 python3 scripts/cli.py init
 ```
 
-### 3. Configure Claude Code Hooks
+### 3. Install as a Plugin
 
-Add the following to your `~/.claude/settings.json`:
+```bash
+# Add the plugin marketplace
+/plugin marketplace add ~/homunculus
 
-```json
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/homunculus/scripts/observe.sh post_tool \"$CLAUDE_TOOL_NAME\" \"$CLAUDE_TOOL_INPUT\""
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/homunculus/scripts/observe.sh stop"
-          }
-        ]
-      }
-    ]
-  }
-}
+# Install the plugin
+/plugin install homunculus@homunculus
 ```
+
+The plugin automatically configures hooks for PreToolUse, PostToolUse, and Stop events.
 
 ### 4. Restart Claude Code
 
@@ -207,8 +186,7 @@ The system monitors its own performance:
 ```
 ~/homunculus/
 ├── config.yaml              # System configuration
-├── data/
-│   └── homunculus.db        # SQLite database
+├── homunculus.db            # SQLite database
 ├── observations/
 │   └── current.jsonl        # Current session observations
 ├── evolved/                  # Installed capabilities
@@ -336,8 +314,8 @@ MIT License - See LICENSE file for details.
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Claude Code                               │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
-│  │  PreToolUse │    │ PostToolUse │    │    Stop     │         │
-│  │    Hook     │    │    Hook     │    │    Hook     │         │
+│  │ PreToolUse  │    │ PostToolUse │    │    Stop     │         │
+│  │   Hook ✓    │    │   Hook ✓    │    │   Hook ✓    │         │
 │  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘         │
 └─────────┼──────────────────┼──────────────────┼─────────────────┘
           │                  │                  │
