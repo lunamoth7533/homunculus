@@ -72,3 +72,4 @@ htmlcov/
 *.temp
 *.bak
 *.backup
+homunculus.db

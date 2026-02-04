@@ -13,7 +13,7 @@ Self-evolution system for Claude Code.
 Run the homunculus CLI with the provided arguments:
 
 ```bash
-python3 ~/homunculus/scripts/cli.py {subcommand} {args}
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cli.py {subcommand} {args}
 ```
 
 ## Available Subcommands
@@ -40,16 +40,16 @@ python3 ~/homunculus/scripts/cli.py {subcommand} {args}
 
 ```bash
 # Show status (default if no subcommand)
-python3 ~/homunculus/scripts/cli.py status
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cli.py status
 
 # List pending proposals
-python3 ~/homunculus/scripts/cli.py proposals
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cli.py proposals
 
 # Approve a proposal
-python3 ~/homunculus/scripts/cli.py approve prop-abc123
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cli.py approve prop-abc123
 
 # Reject with reason
-python3 ~/homunculus/scripts/cli.py reject prop-abc123 --reason "too_complex"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/cli.py reject prop-abc123 --reason "too_complex"
 ```
 
 ## Instructions
