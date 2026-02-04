@@ -285,6 +285,15 @@ def main():
         # Output JSON to stdout (observe.sh will redirect to file)
         print(json.dumps(obs))
 
+        # Try to detect capability usage (non-blocking)
+        try:
+            from track_usage import detect_and_record_usage
+            used = detect_and_record_usage(obs)
+            if used:
+                logger.debug(f"Detected usage of capabilities: {used}")
+        except Exception as e:
+            logger.debug(f"Usage detection skipped: {e}")
+
         logger.debug(f"Observation {obs['id']} processed successfully")
 
     except Exception as e:
