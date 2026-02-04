@@ -2,9 +2,14 @@
 """
 Capability synthesis engine for Homunculus.
 Generates proposals from detected gaps.
+
+Supports two modes:
+1. Template-based (default): Uses YAML templates for deterministic generation
+2. LLM-enhanced (optional): Uses Claude API if ANTHROPIC_API_KEY is set
 """
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -16,9 +21,90 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from utils import (
     HOMUNCULUS_ROOT, generate_id, get_timestamp, db_execute,
-    load_yaml_file, get_db_connection
+    load_yaml_file, get_db_connection, load_config
 )
 from gap_types import get_gap_info, get_capability_types
+
+
+def get_llm_client() -> Optional[Any]:
+    """
+    Get Claude API client if available.
+    Returns None if API key not configured or anthropic package not installed.
+    """
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
+        return None
+
+    try:
+        import anthropic
+        return anthropic.Anthropic(api_key=api_key)
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+
+def llm_enhance_content(
+    template_content: str,
+    gap: Dict[str, Any],
+    capability_type: str,
+    synthesis_prompt: str
+) -> Optional[str]:
+    """
+    Use Claude to enhance template-generated content.
+    Returns enhanced content or None if LLM not available/fails.
+    """
+    client = get_llm_client()
+    if not client:
+        return None
+
+    config = load_config()
+    model = config.get('synthesis', {}).get('synthesis_model', 'claude-sonnet-4-20250514')
+
+    # Map config model names to API model IDs
+    model_map = {
+        'sonnet': 'claude-sonnet-4-20250514',
+        'haiku': 'claude-3-5-haiku-20241022',
+        'opus': 'claude-opus-4-20250514',
+    }
+    model_id = model_map.get(model, model)
+
+    prompt = f"""You are enhancing a Claude Code capability template.
+
+CONTEXT:
+- Gap Type: {gap.get('gap_type', 'unknown')}
+- Domain: {gap.get('domain', 'general')}
+- Desired Capability: {gap.get('desired_capability', 'unknown')}
+- Evidence: {gap.get('evidence_summary', 'none')}
+- Capability Type: {capability_type}
+
+ORIGINAL TEMPLATE OUTPUT:
+```
+{template_content}
+```
+
+SYNTHESIS INSTRUCTIONS:
+{synthesis_prompt}
+
+TASK:
+Improve the template output by:
+1. Making instructions more specific and actionable
+2. Adding concrete examples relevant to the gap
+3. Filling in TODO sections with actual implementation guidance
+4. Ensuring the capability addresses the detected gap
+
+Keep the same format (markdown with YAML frontmatter). Output only the improved content, no explanation."""
+
+    try:
+        response = client.messages.create(
+            model=model_id,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text
+    except Exception as e:
+        print(f"LLM enhancement failed: {e}")
+        return None
 
 
 @dataclass
@@ -184,24 +270,40 @@ class CapabilitySynthesizer:
 
     def _generate_content(self, template: SynthesisTemplate, gap: Dict[str, Any],
                           name: str, slug: str) -> str:
-        """Generate the capability file content."""
+        """
+        Generate the capability file content.
+
+        First generates template-based content, then optionally enhances
+        with LLM if ANTHROPIC_API_KEY is available.
+        """
         timestamp = get_timestamp()
 
-        # For now, generate a structured template without LLM
-        # This can be enhanced later to use Claude for generation
-
+        # Step 1: Generate template-based content
         if template.output_type == 'skill':
-            return self._generate_skill_content(gap, name, slug, timestamp)
+            content = self._generate_skill_content(gap, name, slug, timestamp)
         elif template.output_type == 'hook':
-            return self._generate_hook_content(gap, name, slug, timestamp)
+            content = self._generate_hook_content(gap, name, slug, timestamp)
         elif template.output_type == 'agent':
-            return self._generate_agent_content(gap, name, slug, timestamp)
+            content = self._generate_agent_content(gap, name, slug, timestamp)
         elif template.output_type == 'command':
-            return self._generate_command_content(gap, name, slug, timestamp)
+            content = self._generate_command_content(gap, name, slug, timestamp)
         elif template.output_type == 'mcp_server':
-            return self._generate_mcp_server_content(gap, name, slug, timestamp)
+            content = self._generate_mcp_server_content(gap, name, slug, timestamp)
         else:
-            return self._generate_skill_content(gap, name, slug, timestamp)
+            content = self._generate_skill_content(gap, name, slug, timestamp)
+
+        # Step 2: Optionally enhance with LLM (if API key available)
+        if template.synthesis_prompt and get_llm_client():
+            enhanced = llm_enhance_content(
+                content,
+                gap,
+                template.output_type,
+                template.synthesis_prompt
+            )
+            if enhanced:
+                return enhanced
+
+        return content
 
     def _generate_skill_content(self, gap: Dict, name: str, slug: str, timestamp: str) -> str:
         """Generate skill markdown content."""
