@@ -5,6 +5,7 @@ Gap detection engine for Homunculus.
 
 import re
 import json
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
@@ -318,14 +319,36 @@ class GapDetector:
 
         return "; ".join(summaries) if summaries else "No specific evidence"
 
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for comparison - removes noise, lowercases, strips punctuation."""
+        if not text:
+            return ""
+        # Lowercase and strip
+        t = text.lower().strip()
+        # Remove all punctuation and special characters (keep only alphanumeric and spaces)
+        t = re.sub(r'[^a-z0-9\s]', ' ', t)
+        # Remove timestamps like 2024-01-01 or similar numeric patterns
+        t = re.sub(r'\b\d{4}[-/]\d{2}[-/]\d{2}\b', '', t)
+        # Collapse whitespace
+        t = re.sub(r'\s+', ' ', t).strip()
+        return t
+
+    def _compute_fingerprint(self, gap_type: str, desired_capability: str) -> str:
+        """Compute a fingerprint for exact-match deduplication."""
+        normalized = self._normalize_text(desired_capability)
+        # Extract key words (alphabetically sorted for consistency)
+        words = sorted(set(w for w in normalized.split() if len(w) > 2))
+        key_text = f"{gap_type}:{' '.join(words[:10])}"  # Use first 10 sorted words
+        return hashlib.md5(key_text.encode()).hexdigest()[:12]
+
     def _deduplicate_gaps(self, gaps: List[DetectedGap]) -> List[DetectedGap]:
-        """Remove duplicate or very similar gaps."""
+        """Remove duplicate or very similar gaps using fingerprinting."""
         unique = {}
         for gap in gaps:
-            # Key by gap type + first 50 chars of capability
-            key = f"{gap.gap_type}:{gap.desired_capability[:50].lower()}"
-            if key not in unique or gap.confidence > unique[key].confidence:
-                unique[key] = gap
+            # Use fingerprint for more robust deduplication
+            fingerprint = self._compute_fingerprint(gap.gap_type, gap.desired_capability)
+            if fingerprint not in unique or gap.confidence > unique[fingerprint].confidence:
+                unique[fingerprint] = gap
         return list(unique.values())
 
     def _calculate_similarity(self, text1: str, text2: str) -> float:
@@ -352,17 +375,23 @@ class GapDetector:
 
         return len(intersection) / len(union)
 
-    def _find_similar_gap(self, gap: DetectedGap, threshold: float = 0.7):
+    def _find_similar_gap(self, gap: DetectedGap, threshold: float = 0.5):
         """
         Find a similar existing gap for deduplication.
         Returns (gap_id, similarity) or (None, 0).
+
+        Checks against all non-resolved/non-dismissed gaps to prevent duplicates.
+        Uses fingerprinting for exact matches and similarity for fuzzy matches.
         """
         try:
-            # Get all pending or synthesizing gaps of same type
+            # Compute fingerprint for exact matching
+            new_fingerprint = self._compute_fingerprint(gap.gap_type, gap.desired_capability)
+
+            # Get all active gaps of same type (not resolved or dismissed)
             existing_gaps = db_execute(
                 """SELECT id, desired_capability, domain, confidence, evidence_summary
                    FROM gaps
-                   WHERE gap_type = ? AND status IN ('pending', 'synthesizing')""",
+                   WHERE gap_type = ? AND status NOT IN ('resolved', 'dismissed')""",
                 (gap.gap_type,),
                 db_path=self.db_path
             )
@@ -371,15 +400,23 @@ class GapDetector:
             best_similarity = 0.0
 
             for existing in existing_gaps:
-                # Calculate similarity
-                sim = self._calculate_similarity(
-                    gap.desired_capability,
+                # Check fingerprint first (exact match)
+                existing_fingerprint = self._compute_fingerprint(
+                    gap.gap_type,
                     existing['desired_capability']
+                )
+                if new_fingerprint == existing_fingerprint:
+                    return existing['id'], 1.0
+
+                # Calculate text similarity for fuzzy matching
+                sim = self._calculate_similarity(
+                    self._normalize_text(gap.desired_capability),
+                    self._normalize_text(existing['desired_capability'])
                 )
 
                 # Boost similarity if domains match
                 if gap.domain and existing['domain'] and gap.domain == existing['domain']:
-                    sim = min(1.0, sim + 0.1)
+                    sim = min(1.0, sim + 0.15)
 
                 if sim > best_similarity and sim >= threshold:
                     best_match = existing['id']
