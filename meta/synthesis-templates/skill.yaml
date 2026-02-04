@@ -1,0 +1,54 @@
+---
+id: skill-template
+version: 1
+output_type: skill
+output_path: "evolved/skills/{slug}.md"
+applicable_gap_types:
+  - tool
+  - knowledge
+  - workflow
+  - recovery
+  - reasoning
+  - verification
+  - discovery
+
+structure: |
+  ---
+  name: {name}
+  description: {description}
+  evolved_from:
+    gap_id: {gap_id}
+    gap_type: {gap_type}
+    created: {timestamp}
+  ---
+
+  # {title}
+
+  ## When to Use
+  {trigger_description}
+
+  ## What This Skill Does
+  {capability_description}
+
+  ## Instructions
+  {instructions}
+
+  ## Examples
+  {examples}
+
+synthesis_prompt: |
+  Generate a Claude Code skill to fill this capability gap:
+
+  Gap Type: {gap_type}
+  Domain: {domain}
+  Desired Capability: {desired_capability}
+  Evidence: {evidence_summary}
+
+  Create a skill that:
+  1. Has a clear trigger condition describing when to use it
+  2. Provides step-by-step instructions Claude can follow
+  3. Includes 2-3 concrete examples
+  4. Is minimal - only what's needed to fill the gap
+  5. Uses existing tools (Bash, Read, Write, etc.) when possible
+
+  Format as markdown with YAML frontmatter.

@@ -1,0 +1,378 @@
+#!/usr/bin/env python3
+"""
+Capability installation engine for Homunculus.
+Handles installing, tracking, and rolling back capabilities.
+"""
+
+import json
+import shutil
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+from dataclasses import dataclass
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+
+from utils import (
+    HOMUNCULUS_ROOT, generate_id, get_timestamp,
+    get_db_connection, db_execute
+)
+
+
+@dataclass
+class InstallationResult:
+    """Result of an installation operation."""
+    success: bool
+    capability_id: str
+    message: str
+    files_created: List[str]
+    rollback_info: Optional[Dict[str, Any]] = None
+
+
+def get_proposal(proposal_id: str) -> Optional[Dict[str, Any]]:
+    """Get a proposal by ID (full or partial)."""
+    proposals = db_execute(
+        """SELECT p.*, g.desired_capability, g.gap_type as origin_gap_type
+           FROM proposals p
+           JOIN gaps g ON p.gap_id = g.id
+           WHERE p.id = ? OR p.id LIKE ?""",
+        (proposal_id, f"{proposal_id}%")
+    )
+    return proposals[0] if proposals else None
+
+
+def get_capability(capability_id: str) -> Optional[Dict[str, Any]]:
+    """Get a capability by ID or name."""
+    caps = db_execute(
+        """SELECT * FROM capabilities
+           WHERE id = ? OR id LIKE ? OR name = ?""",
+        (capability_id, f"{capability_id}%", capability_id)
+    )
+    return caps[0] if caps else None
+
+
+def install_proposal(proposal_id: str) -> InstallationResult:
+    """Install a proposal's capability files."""
+    proposal = get_proposal(proposal_id)
+    if not proposal:
+        return InstallationResult(
+            success=False,
+            capability_id="",
+            message=f"Proposal not found: {proposal_id}",
+            files_created=[]
+        )
+
+    if proposal['status'] != 'pending':
+        return InstallationResult(
+            success=False,
+            capability_id="",
+            message=f"Proposal is not pending (status: {proposal['status']})",
+            files_created=[]
+        )
+
+    # Parse files to create
+    try:
+        files = json.loads(proposal['files_json'])
+    except json.JSONDecodeError:
+        return InstallationResult(
+            success=False,
+            capability_id="",
+            message="Failed to parse proposal files",
+            files_created=[]
+        )
+
+    # Install files
+    created_files = []
+    rollback_info = {"files": [], "backups": []}
+
+    try:
+        for file_info in files:
+            action = file_info.get('action', 'create')
+            rel_path = file_info['path']
+            content = file_info.get('content', '')
+
+            # Resolve path relative to HOMUNCULUS_ROOT
+            full_path = HOMUNCULUS_ROOT / rel_path
+
+            # Create parent directory if needed
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if action == 'create':
+                # Backup existing file if present
+                if full_path.exists():
+                    backup_path = full_path.with_suffix(full_path.suffix + '.backup')
+                    shutil.copy2(full_path, backup_path)
+                    rollback_info['backups'].append({
+                        'original': str(full_path),
+                        'backup': str(backup_path)
+                    })
+
+                # Write the file
+                full_path.write_text(content)
+                created_files.append(str(full_path))
+                rollback_info['files'].append({
+                    'path': str(full_path),
+                    'action': 'created'
+                })
+
+            elif action == 'modify':
+                # Backup existing file
+                if full_path.exists():
+                    backup_path = full_path.with_suffix(full_path.suffix + '.backup')
+                    shutil.copy2(full_path, backup_path)
+                    rollback_info['backups'].append({
+                        'original': str(full_path),
+                        'backup': str(backup_path)
+                    })
+
+                # Apply modification (for now, just overwrite)
+                full_path.write_text(content)
+                created_files.append(str(full_path))
+                rollback_info['files'].append({
+                    'path': str(full_path),
+                    'action': 'modified'
+                })
+
+    except Exception as e:
+        # Rollback on error
+        _rollback_files(rollback_info)
+        return InstallationResult(
+            success=False,
+            capability_id="",
+            message=f"Installation failed: {e}",
+            files_created=[]
+        )
+
+    # Create capability record
+    capability_id = generate_id("cap")
+    timestamp = get_timestamp()
+
+    try:
+        with get_db_connection() as conn:
+            # Insert capability
+            conn.execute("""
+                INSERT INTO capabilities (
+                    id, name, capability_type, scope, project_path,
+                    source_proposal_id, source_gap_id, installed_files_json,
+                    settings_changes_json, installed_at, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+            """, (
+                capability_id,
+                proposal['capability_name'],
+                proposal['capability_type'],
+                proposal['scope'],
+                proposal.get('project_path'),
+                proposal['id'],
+                proposal['gap_id'],
+                proposal['files_json'],
+                json.dumps(rollback_info),  # Store rollback info in settings_changes_json
+                timestamp
+            ))
+
+            # Update proposal status
+            conn.execute(
+                "UPDATE proposals SET status = 'approved', reviewed_at = ?, reviewer_action = 'approve' WHERE id = ?",
+                (timestamp, proposal['id'])
+            )
+
+            # Update gap status
+            conn.execute(
+                "UPDATE gaps SET status = 'resolved', updated_at = ? WHERE id = ?",
+                (timestamp, proposal['gap_id'])
+            )
+
+            conn.commit()
+
+    except Exception as e:
+        # Rollback files on database error
+        _rollback_files(rollback_info)
+        return InstallationResult(
+            success=False,
+            capability_id="",
+            message=f"Database error: {e}",
+            files_created=[]
+        )
+
+    return InstallationResult(
+        success=True,
+        capability_id=capability_id,
+        message=f"Installed capability: {proposal['capability_name']}",
+        files_created=created_files,
+        rollback_info=rollback_info
+    )
+
+
+def reject_proposal(proposal_id: str, reason: str = "") -> bool:
+    """Reject a proposal."""
+    proposal = get_proposal(proposal_id)
+    if not proposal:
+        return False
+
+    if proposal['status'] != 'pending':
+        return False
+
+    timestamp = get_timestamp()
+
+    try:
+        with get_db_connection() as conn:
+            # Update proposal
+            conn.execute(
+                """UPDATE proposals
+                   SET status = 'rejected', rejection_reason = ?, reviewed_at = ?, reviewer_action = 'reject'
+                   WHERE id = ?""",
+                (reason, timestamp, proposal['id'])
+            )
+
+            # Update gap - back to pending so it can be re-synthesized
+            conn.execute(
+                "UPDATE gaps SET status = 'pending', resolved_by_proposal_id = NULL WHERE id = ?",
+                (proposal['gap_id'],)
+            )
+
+            conn.commit()
+            return True
+
+    except Exception:
+        return False
+
+
+def rollback_capability(capability_id: str) -> InstallationResult:
+    """Rollback an installed capability."""
+    capability = get_capability(capability_id)
+    if not capability:
+        return InstallationResult(
+            success=False,
+            capability_id="",
+            message=f"Capability not found: {capability_id}",
+            files_created=[]
+        )
+
+    if capability['status'] != 'active':
+        return InstallationResult(
+            success=False,
+            capability_id="",
+            message=f"Capability is not active (status: {capability['status']})",
+            files_created=[]
+        )
+
+    # Parse rollback info (stored in settings_changes_json)
+    try:
+        rollback_info = json.loads(capability['settings_changes_json'] or '{}')
+    except json.JSONDecodeError:
+        rollback_info = {}
+
+    # Perform rollback
+    removed_files = _rollback_files(rollback_info)
+
+    # Update database
+    timestamp = get_timestamp()
+    try:
+        with get_db_connection() as conn:
+            # Mark capability as rolled back
+            conn.execute(
+                "UPDATE capabilities SET status = 'rolled_back', rolled_back_at = ? WHERE id = ?",
+                (timestamp, capability['id'])
+            )
+
+            # Update proposal if exists
+            if capability.get('source_proposal_id'):
+                conn.execute(
+                    "UPDATE proposals SET status = 'rolled_back' WHERE id = ?",
+                    (capability['source_proposal_id'],)
+                )
+
+            conn.commit()
+
+    except Exception as e:
+        return InstallationResult(
+            success=False,
+            capability_id=capability['id'],
+            message=f"Rollback partial - database error: {e}",
+            files_created=removed_files
+        )
+
+    return InstallationResult(
+        success=True,
+        capability_id=capability['id'],
+        message=f"Rolled back capability: {capability['name']}",
+        files_created=removed_files
+    )
+
+
+def _rollback_files(rollback_info: Dict[str, Any]) -> List[str]:
+    """Rollback file changes using rollback info."""
+    affected_files = []
+
+    # Restore backups first
+    for backup in rollback_info.get('backups', []):
+        original = Path(backup['original'])
+        backup_path = Path(backup['backup'])
+        if backup_path.exists():
+            shutil.copy2(backup_path, original)
+            backup_path.unlink()
+            affected_files.append(str(original))
+
+    # Remove created files (that weren't backups)
+    backed_up_originals = {b['original'] for b in rollback_info.get('backups', [])}
+    for file_info in rollback_info.get('files', []):
+        if file_info['action'] == 'created' and file_info['path'] not in backed_up_originals:
+            path = Path(file_info['path'])
+            if path.exists():
+                path.unlink()
+                affected_files.append(str(path))
+
+    return affected_files
+
+
+def format_proposal_review(proposal: Dict[str, Any]) -> str:
+    """Format a proposal for human review."""
+    files = json.loads(proposal.get('files_json', '[]'))
+
+    output = []
+    output.append("=" * 70)
+    output.append(f"PROPOSAL REVIEW: {proposal['id']}")
+    output.append("=" * 70)
+    output.append("")
+    output.append(f"Type: {proposal['capability_type'].upper()}")
+    output.append(f"Name: {proposal['capability_name']}")
+    output.append(f"Summary: {proposal['capability_summary']}")
+    output.append(f"Scope: {proposal['scope']}")
+    output.append(f"Confidence: {proposal['confidence']:.2f}")
+    output.append(f"Status: {proposal['status']}")
+    output.append("")
+    output.append("-" * 50)
+    output.append("ORIGIN GAP")
+    output.append("-" * 50)
+    output.append(f"Gap ID: {proposal['gap_id']}")
+    output.append(f"Gap Type: {proposal.get('origin_gap_type', 'N/A')}")
+    output.append(f"Desired: {proposal.get('desired_capability', 'N/A')}")
+    output.append("")
+    output.append("-" * 50)
+    output.append("REASONING")
+    output.append("-" * 50)
+    output.append(proposal.get('reasoning', 'No reasoning provided'))
+    output.append("")
+    output.append("-" * 50)
+    output.append("FILES TO CREATE")
+    output.append("-" * 50)
+
+    for i, file_info in enumerate(files, 1):
+        output.append(f"\n[{i}] {file_info['action'].upper()}: {file_info['path']}")
+        output.append("-" * 40)
+        content = file_info.get('content', '')
+        # Show first 50 lines
+        lines = content.split('\n')
+        preview = '\n'.join(lines[:50])
+        if len(lines) > 50:
+            preview += f"\n... ({len(lines) - 50} more lines)"
+        output.append(preview)
+        output.append("")
+
+    output.append("=" * 70)
+    output.append("ACTIONS")
+    output.append("=" * 70)
+    output.append(f"  Approve: homunculus approve {proposal['id'][:12]}")
+    output.append(f"  Reject:  homunculus reject {proposal['id'][:12]} --reason \"...\"")
+    output.append("")
+
+    return '\n'.join(output)

@@ -1,0 +1,46 @@
+---
+id: command-template
+version: 1
+output_type: command
+output_path: "evolved/commands/{slug}.md"
+applicable_gap_types:
+  - workflow
+  - tool
+
+structure: |
+  ---
+  name: {name}
+  description: {description}
+  command: true
+  evolved_from:
+    gap_id: {gap_id}
+    gap_type: {gap_type}
+  ---
+
+  # {title} Command
+
+  ## Usage
+  /{command_name} {arguments}
+
+  ## Description
+  {description}
+
+  ## Steps
+  {steps}
+
+  ## Examples
+  {examples}
+
+synthesis_prompt: |
+  Generate a user-invokable command for:
+
+  Gap Type: {gap_type}
+  Desired Capability: {desired_capability}
+
+  Create a command that:
+  1. Has a clear, memorable name (e.g., /new-feature, /run-tests)
+  2. Can accept optional arguments
+  3. Provides step-by-step instructions
+  4. Includes 2-3 usage examples
+
+  The command should be invoked as /{command-name}.

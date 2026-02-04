@@ -1,0 +1,54 @@
+---
+id: hook-template
+version: 1
+output_type: hook
+output_path: "evolved/hooks/{slug}.yaml"
+applicable_gap_types:
+  - quality
+  - permission
+  - context
+  - learning
+
+structure: |
+  ---
+  name: {name}
+  description: {description}
+  hook_type: {hook_type}
+  matcher: {matcher}
+  evolved_from:
+    gap_id: {gap_id}
+    gap_type: {gap_type}
+  ---
+
+  # Hook: {name}
+
+  ## Purpose
+  {purpose}
+
+  ## Configuration
+  Add to ~/.claude/settings.json:
+
+  ```json
+  {settings_json}
+  ```
+
+  ## Script
+  ```bash
+  {script_content}
+  ```
+
+synthesis_prompt: |
+  Generate a Claude Code hook to address this gap:
+
+  Gap Type: {gap_type}
+  Desired Capability: {desired_capability}
+  Evidence: {evidence_summary}
+
+  Create a hook that:
+  1. Uses PreToolUse for prevention, PostToolUse for reaction
+  2. Is minimal and fast (hooks run synchronously)
+  3. Handles errors gracefully
+  4. Includes the settings.json snippet to add
+
+  Hook types: PreToolUse, PostToolUse, Notification, Stop
+  Matcher can be "*" for all tools or specific tool name.

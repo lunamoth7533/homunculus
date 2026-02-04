@@ -1,0 +1,54 @@
+---
+id: agent-template
+version: 1
+output_type: agent
+output_path: "evolved/agents/{slug}.md"
+applicable_gap_types:
+  - workflow
+  - reasoning
+  - speed
+  - integration
+
+structure: |
+  ---
+  name: {name}
+  description: {description}
+  model: {model}
+  tools: {tools}
+  evolved_from:
+    gap_id: {gap_id}
+    gap_type: {gap_type}
+  ---
+
+  # {title} Agent
+
+  ## Purpose
+  {purpose}
+
+  ## When to Dispatch
+  {dispatch_conditions}
+
+  ## Agent Instructions
+  {agent_instructions}
+
+  ## Expected Outputs
+  {expected_outputs}
+
+  ## Example Usage
+  {example_usage}
+
+synthesis_prompt: |
+  Generate a specialized subagent definition for:
+
+  Gap Type: {gap_type}
+  Domain: {domain}
+  Desired Capability: {desired_capability}
+
+  Create an agent that:
+  1. Has a focused, single responsibility
+  2. Uses haiku model unless complexity requires sonnet
+  3. Specifies exactly which tools it needs (Read, Write, Bash, etc.)
+  4. Defines clear success criteria
+  5. Can be dispatched via the Task tool
+
+  Format as markdown with YAML frontmatter.

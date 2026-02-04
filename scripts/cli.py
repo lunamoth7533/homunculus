@@ -358,45 +358,203 @@ def cmd_detect(args):
 
 def cmd_synthesize(args):
     """Manually trigger synthesis."""
+    from synthesizer import run_synthesis, CapabilitySynthesizer
+
     print()
-    print("Synthesis not yet implemented.")
-    print("This will be added in Phase 3.")
+    print("=" * 60)
+    print("CAPABILITY SYNTHESIS")
+    print("=" * 60)
+
+    # Check for templates
+    synthesizer = CapabilitySynthesizer()
+    if not synthesizer.templates:
+        print("\nNo synthesis templates found.")
+        print("Templates should be in: ~/homunculus/meta/synthesis-templates/")
+        return 1
+
+    print(f"\nLoaded {len(synthesizer.templates)} synthesis template(s):")
+    for template_type, template in synthesizer.templates.items():
+        print(f"  - {template_type}: {template.id} (v{template.version})")
+
+    # Run synthesis
+    gap_id = getattr(args, 'gap_id', None)
+    limit = getattr(args, 'limit', 5)
+
+    print(f"\nSynthesizing proposals (limit: {limit})...")
+    proposals = run_synthesis(gap_id=gap_id, limit=limit)
+
+    if not proposals:
+        print("\nNo proposals generated.")
+        if not gap_id:
+            print("(No pending gaps found, or no matching templates)")
+        return 0
+
+    print(f"\nGenerated {len(proposals)} proposal(s):\n")
+    for p in proposals:
+        print(f"  [{p.id[:12]}] {p.capability_type.upper()}")
+        print(f"    Name: {p.capability_name}")
+        print(f"    Summary: {p.capability_summary[:60]}...")
+        print(f"    Confidence: {p.confidence:.2f}")
+        print(f"    Scope: {p.scope}")
+        print(f"    Files: {len(p.files)}")
+        for f in p.files:
+            print(f"      - {f['action']}: {f['path']}")
+        print()
+
+    print("Use 'homunculus review <proposal-id>' to review a proposal.")
+    print("=" * 60)
     print()
     return 0
 
 
 def cmd_review(args):
     """Review a proposal."""
+    from installer import get_proposal, format_proposal_review
+
+    proposal_id = args.proposal_id
+
+    proposal = get_proposal(proposal_id)
+    if not proposal:
+        print(f"\nProposal not found: {proposal_id}")
+        return 1
+
     print()
-    print("Review not yet implemented.")
-    print("This will be added in Phase 4.")
-    print()
+    print(format_proposal_review(proposal))
     return 0
 
 
 def cmd_approve(args):
     """Approve a proposal."""
+    from installer import install_proposal, get_proposal
+
+    proposal_id = args.proposal_id
+
+    # First verify proposal exists
+    proposal = get_proposal(proposal_id)
+    if not proposal:
+        print(f"\nProposal not found: {proposal_id}")
+        return 1
+
+    if proposal['status'] != 'pending':
+        print(f"\nProposal is not pending (status: {proposal['status']})")
+        return 1
+
     print()
-    print("Approval not yet implemented.")
-    print("This will be added in Phase 4.")
+    print("=" * 60)
+    print("INSTALLING CAPABILITY")
+    print("=" * 60)
+    print()
+    print(f"  Proposal: {proposal['id'][:12]}")
+    print(f"  Type: {proposal['capability_type']}")
+    print(f"  Name: {proposal['capability_name']}")
+    print()
+
+    # Confirm installation
+    confirm = input("Proceed with installation? [y/N]: ").strip().lower()
+    if confirm not in ('y', 'yes'):
+        print("\nInstallation cancelled.")
+        return 0
+
+    # Install
+    result = install_proposal(proposal['id'])
+
+    if result.success:
+        print()
+        print("Installation successful!")
+        print(f"  Capability ID: {result.capability_id}")
+        print(f"  Files created:")
+        for f in result.files_created:
+            print(f"    - {f}")
+        print()
+        print(f"To rollback: homunculus rollback {proposal['capability_name']}")
+    else:
+        print()
+        print(f"Installation failed: {result.message}")
+        return 1
+
     print()
     return 0
 
 
 def cmd_reject(args):
     """Reject a proposal."""
+    from installer import reject_proposal, get_proposal
+
+    proposal_id = args.proposal_id
+    reason = getattr(args, 'reason', '') or "User rejected"
+
+    # Verify proposal exists
+    proposal = get_proposal(proposal_id)
+    if not proposal:
+        print(f"\nProposal not found: {proposal_id}")
+        return 1
+
+    if proposal['status'] != 'pending':
+        print(f"\nProposal is not pending (status: {proposal['status']})")
+        return 1
+
     print()
-    print("Rejection not yet implemented.")
-    print("This will be added in Phase 4.")
+    print(f"Rejecting proposal: {proposal['id'][:12]}")
+    print(f"  Name: {proposal['capability_name']}")
+    print(f"  Reason: {reason}")
+
+    if reject_proposal(proposal['id'], reason):
+        print("\nProposal rejected.")
+        print("The gap has been returned to pending status.")
+    else:
+        print("\nFailed to reject proposal.")
+        return 1
+
     print()
     return 0
 
 
 def cmd_rollback(args):
     """Rollback a capability."""
+    from installer import rollback_capability, get_capability
+
+    capability_name = args.capability_name
+
+    # Verify capability exists
+    capability = get_capability(capability_name)
+    if not capability:
+        print(f"\nCapability not found: {capability_name}")
+        return 1
+
+    if capability['status'] != 'active':
+        print(f"\nCapability is not active (status: {capability['status']})")
+        return 1
+
     print()
-    print("Rollback not yet implemented.")
-    print("This will be added in Phase 4.")
+    print("=" * 60)
+    print("ROLLBACK CAPABILITY")
+    print("=" * 60)
+    print()
+    print(f"  Capability: {capability['name']}")
+    print(f"  Type: {capability['capability_type']}")
+    print(f"  Installed: {capability['installed_at']}")
+    print()
+
+    # Confirm rollback
+    confirm = input("Proceed with rollback? [y/N]: ").strip().lower()
+    if confirm not in ('y', 'yes'):
+        print("\nRollback cancelled.")
+        return 0
+
+    # Rollback
+    result = rollback_capability(capability['id'])
+
+    if result.success:
+        print()
+        print("Rollback successful!")
+        print("  Files affected:")
+        for f in result.files_created:
+            print(f"    - {f}")
+    else:
+        print()
+        print(f"Rollback failed: {result.message}")
+        return 1
+
     print()
     return 0
 
@@ -430,12 +588,57 @@ def cmd_dismiss_gap(args):
 
 def cmd_meta_status(args):
     """Show meta-evolution status."""
+    from meta_evolution import MetaEvolutionEngine, run_meta_evolution
+
     print()
-    print("META-EVOLUTION STATUS")
-    print("-" * 40)
+    print("=" * 60)
+    print("META-EVOLUTION STATUS (LAYER 2)")
+    print("=" * 60)
     print()
-    print("Meta-evolution not yet implemented.")
-    print("This will be added in Phase 5.")
+
+    engine = MetaEvolutionEngine()
+    status = engine.get_status()
+
+    print(f"  Enabled: {'Yes' if status['enabled'] else 'No'}")
+    print()
+
+    print("  -- Observations --")
+    print(f"  Total: {status['observations']['total']}")
+    for obs_type, count in status['observations']['by_type'].items():
+        print(f"    {obs_type}: {count}")
+    print()
+
+    print("  -- Meta-Proposals --")
+    print(f"  Total: {status['proposals']['total']}")
+    print(f"  Pending: {status['proposals']['pending']}")
+    print(f"  Applied: {status['proposals']['applied']}")
+    print()
+
+    if status['detector_health']:
+        print("  -- Detector Health --")
+        for d in status['detector_health']:
+            print(f"    {d['id'][:25]}: {d['gaps']} gaps, {d['approval_rate']} approval")
+        print()
+
+    if status['template_health']:
+        print("  -- Template Health --")
+        for t in status['template_health']:
+            print(f"    {t['id'][:25]}: {t['proposals']} proposals, {t['approval_rate']} approval")
+        print()
+
+    # Offer to run analysis
+    if getattr(args, 'analyze', False):
+        print("Running meta-analysis...")
+        result = run_meta_evolution()
+        print(f"\n  Generated {result['observations']} observations")
+        print(f"  Generated {result['proposals']} proposals")
+
+        if result.get('observation_details'):
+            print("\n  Recent Observations:")
+            for obs in result['observation_details'][:3]:
+                print(f"    [{obs['type']}] {obs['insight'][:50]}...")
+
+    print("=" * 60)
     print()
     return 0
 
@@ -477,6 +680,7 @@ def main():
     # synthesize
     synth_parser = subparsers.add_parser("synthesize", help="Manually trigger synthesis")
     synth_parser.add_argument("gap_id", nargs="?", help="Specific gap ID to synthesize")
+    synth_parser.add_argument("--limit", type=int, default=5, help="Max gaps to process (default: 5)")
 
     # review
     review_parser = subparsers.add_parser("review", help="Review a proposal")
@@ -501,7 +705,8 @@ def main():
     dismiss_parser.add_argument("--reason", help="Dismissal reason")
 
     # meta-status
-    subparsers.add_parser("meta-status", help="Show meta-evolution status")
+    meta_parser = subparsers.add_parser("meta-status", help="Show meta-evolution status")
+    meta_parser.add_argument("--analyze", action="store_true", help="Run meta-analysis")
 
     args = parser.parse_args()
 
