@@ -426,8 +426,10 @@ def cmd_review(args):
 def cmd_approve(args):
     """Approve a proposal."""
     from installer import install_proposal, get_proposal
+    from utils import HOMUNCULUS_ROOT
 
     proposal_id = args.proposal_id
+    dry_run = getattr(args, 'dry_run', False)
 
     # First verify proposal exists
     proposal = get_proposal(proposal_id)
@@ -439,15 +441,54 @@ def cmd_approve(args):
         print(f"\nProposal is not pending (status: {proposal['status']})")
         return 1
 
+    # Parse files
+    try:
+        files = json.loads(proposal.get('files_json', '[]'))
+    except json.JSONDecodeError:
+        files = []
+
     print()
-    print("=" * 60)
-    print("INSTALLING CAPABILITY")
-    print("=" * 60)
+    if dry_run:
+        print("=" * 60)
+        print("DRY RUN - No changes will be made")
+        print("=" * 60)
+    else:
+        print("=" * 60)
+        print("INSTALLING CAPABILITY")
+        print("=" * 60)
     print()
     print(f"  Proposal: {proposal['id'][:12]}")
     print(f"  Type: {proposal['capability_type']}")
     print(f"  Name: {proposal['capability_name']}")
+    print(f"  Scope: {proposal['scope']}")
     print()
+
+    if dry_run:
+        # Show what would be created
+        print("Files that would be created:")
+        for f in files:
+            rel_path = f.get('path', '')
+            action = f.get('action', 'create')
+            full_path = HOMUNCULUS_ROOT / rel_path
+            exists = full_path.exists()
+            status = "(exists - would overwrite)" if exists else "(new)"
+            print(f"  [{action.upper()}] {rel_path} {status}")
+
+            # Show content preview
+            content = f.get('content', '')
+            if content:
+                lines = content.split('\n')
+                print(f"    Preview ({len(lines)} lines):")
+                for line in lines[:5]:
+                    print(f"      {line[:70]}")
+                if len(lines) > 5:
+                    print(f"      ... ({len(lines) - 5} more lines)")
+            print()
+
+        print("-" * 60)
+        print("To install: homunculus approve", proposal['id'][:12])
+        print()
+        return 0
 
     # Confirm installation
     confirm = input("Proceed with installation? [y/N]: ").strip().lower()
@@ -689,6 +730,7 @@ def main():
     # approve
     approve_parser = subparsers.add_parser("approve", help="Approve a proposal")
     approve_parser.add_argument("proposal_id", help="Proposal ID to approve")
+    approve_parser.add_argument("--dry-run", action="store_true", help="Show what would be installed without installing")
 
     # reject
     reject_parser = subparsers.add_parser("reject", help="Reject a proposal")
