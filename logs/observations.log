@@ -1,0 +1,6 @@
+2026-02-03 18:45:36,648 - DEBUG - Processing post_tool event for session session-test...
+2026-02-03 18:45:36,648 - DEBUG - Observation obs-bb4d858ff3d99b44 processed successfully
+2026-02-03 18:45:40,781 - DEBUG - Processing post_tool event for session session-test...
+2026-02-03 18:45:40,781 - WARNING - JSON decode error: Expecting value: line 1 column 1 (char 0)
+2026-02-03 18:45:40,781 - DEBUG - Empty input data, skipping
+2026-02-03 18:45:41,334 - ERROR - Insufficient arguments: ['scripts/process_observation.py']
