@@ -8,6 +8,7 @@ Homunculus is a Claude Code plugin that enables automatic detection of capabilit
 
 - **16 Gap Types**: Detects tool, knowledge, workflow, integration, context, permission, quality, speed, communication, recovery, reasoning, verification, discovery, learning, evolution, and self-awareness gaps
 - **5 Capability Types**: Generates skills, hooks, agents, commands, and MCP servers
+- **Smart Deduplication**: Fingerprint-based and fuzzy matching prevents duplicate gaps across sessions
 - **Human-in-the-Loop**: All proposed capabilities require human approval before installation
 - **Rollback Support**: Every installed capability can be rolled back
 - **Layer 2 Meta-Evolution**: The system monitors and improves its own detection and synthesis performance
@@ -150,6 +151,17 @@ The detection engine analyzes observations using 16 detector rules defined in `~
 - Repeated clarification requests
 - Permission denials
 
+#### Deduplication
+
+Gaps are automatically deduplicated to prevent redundant entries:
+
+| Method | Description |
+|--------|-------------|
+| **Fingerprinting** | Gaps are hashed using sorted, normalized keywords. Variations like "Cannot read PDF files" and "PDF files cannot be read!" match exactly. |
+| **Fuzzy matching** | Word-based Jaccard similarity (threshold: 50%) catches near-duplicates with different phrasing. |
+| **Cross-session** | New gaps are compared against all active gaps (pending, synthesizing, proposed) - not just within the current session. |
+| **Merging** | Duplicate gaps update the existing gap's confidence and evidence rather than creating new entries. |
+
 ### 3. Synthesis
 
 When gaps are detected, the synthesis engine uses templates from `~/homunculus/meta/synthesis-templates/` to generate capability proposals. Templates exist for:
@@ -217,7 +229,7 @@ The system monitors its own performance:
 Edit `~/homunculus/config.yaml` to customize:
 
 ```yaml
-version: "1.0.0"
+version: "1.2.0"
 
 detection:
   min_confidence_threshold: 0.3    # Minimum confidence to detect a gap
